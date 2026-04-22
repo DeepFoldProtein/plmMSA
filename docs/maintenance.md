@@ -3,6 +3,56 @@
 Runbook for keeping the stack healthy on the `deepfold` host. Pair with
 `docs/cloudflare-tunnel.md` for the public-edge piece.
 
+## Validating a running stack
+
+One-shot smoke against the public hostname (or substitute `http://localhost:8080`
+for a local-only run). Covers every surface a client hits:
+
+```bash
+BASE=https://plmmsa.deepfold.org
+BOOT=$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)
+
+# 1. Health + version (unauthenticated).
+curl -sS $BASE/health
+curl -sS $BASE/v2/version | jq .models
+
+# 2. /v1/* is intentionally 410 Gone.
+curl -sS $BASE/v1/anything
+
+# 3. Auth gate — every /v2/* and /admin/* route requires a bearer token.
+curl -sS -X POST $BASE/v2/msa -d '{"sequences":["MKT"]}' \
+    -H 'Content-Type: application/json'   # expect 401 E_AUTH_MISSING
+
+# 4. Mint a client token (bootstrap token OK for this step).
+TOKEN=$(curl -sS -X POST $BASE/admin/tokens \
+    -H "Authorization: Bearer $BOOT" -H 'Content-Type: application/json' \
+    -d '{"label":"smoke"}' | jq -r .token)
+
+# 5. End-to-end MSA submission + poll.
+SEQ=$(tail -n +2 tests/fixtures/casp15/T1120.fasta | tr -d '\n')
+JID=$(curl -sS -X POST $BASE/v2/msa \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d "$(jq -Rn --arg s "$SEQ" '{sequences:[$s],query_id:"T1120",model:"ankh_cl",collection:"ankh_uniref50",k:50}')" \
+    | jq -r .job_id)
+while true; do
+    ST=$(curl -sS $BASE/v2/msa/$JID -H "Authorization: Bearer $TOKEN" | jq -r .status)
+    echo "status: $ST"
+    [[ "$ST" == "succeeded" || "$ST" == "failed" || "$ST" == "cancelled" ]] && break
+    sleep 5
+done
+
+# 6. Expected: status=succeeded, stats.hits_fetched == stats.hits_found, depth = k + 1.
+```
+
+Protected routes (every one returns 401 E_AUTH_MISSING without a bearer token):
+
+- `POST /v2/msa`, `GET /v2/msa/{id}`, `DELETE /v2/msa/{id}`
+- `POST /v2/embed`, `POST /v2/search`, `POST /v2/align`
+- `POST /admin/tokens`, `GET /admin/tokens`, `DELETE /admin/tokens/{id}`
+
+Unauthenticated: `/health`, `/v2/version`, `/v1/*` (sunset), `/openapi.json`,
+`/docs`, `/redoc`.
+
 ## Starting / stopping the stack
 
 ```bash

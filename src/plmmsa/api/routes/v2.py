@@ -73,7 +73,12 @@ class SubmitResponse(BaseModel):
     status_url: str
 
 
-@router.post("/msa", status_code=202, response_model=SubmitResponse)
+@router.post(
+    "/msa",
+    status_code=202,
+    response_model=SubmitResponse,
+    dependencies=[Depends(require_admin_token)],
+)
 async def submit_msa(req: SubmitRequest) -> SubmitResponse:
     store = await _get_job_store()
     job = await store.create(req.model_dump())
@@ -84,7 +89,7 @@ async def submit_msa(req: SubmitRequest) -> SubmitResponse:
     )
 
 
-@router.get("/msa/{job_id}")
+@router.get("/msa/{job_id}", dependencies=[Depends(require_admin_token)])
 async def get_msa(job_id: str = Path(..., min_length=1)) -> JSONResponse:
     store = await _get_job_store()
     job = await store.get(job_id)
@@ -98,7 +103,11 @@ async def get_msa(job_id: str = Path(..., min_length=1)) -> JSONResponse:
     return JSONResponse(status_code=200, content=job.model_dump(mode="json"))
 
 
-@router.delete("/msa/{job_id}", status_code=204)
+@router.delete(
+    "/msa/{job_id}",
+    status_code=204,
+    dependencies=[Depends(require_admin_token)],
+)
 async def cancel_msa(job_id: str = Path(..., min_length=1)) -> Response:
     store = await _get_job_store()
     job = await store.cancel(job_id)
