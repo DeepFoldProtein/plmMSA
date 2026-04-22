@@ -93,14 +93,16 @@ for the test-vs-full index swap recipe + a synthetic `/search` sanity check.
       `k` UniRef ids back.
 
 ### 4. Sequence cache
-- [ ] UniRef50 FASTA available at a path operators can reach (`/gpfs` or a local download).
-- [ ] Populate once, then leave:
-  ```bash
-  uv run python -m plmmsa.tools.build_sequence_cache \
-      --fasta /path/to/uniref50.fasta \
-      --redis-url redis://localhost:6379
-  ```
-- [ ] Verify a few ids round-trip via `RedisTargetFetcher` (see the example in `docs/maintenance.md`).
+See [`docs/maintenance.md#uniref50-sequence-cache`](./docs/maintenance.md#uniref50-sequence-cache)
+for the full recipe (subset validation + full 60-min load + id-format caveat).
+- [ ] UniRef50 FASTA reachable from the host (deepfold: `/gpfs/database/casp16/uniref50/uniref50.fasta`, 26 GB).
+- [ ] Pick an id scheme that matches the active FAISS index — `UniRef50_*`
+      (UniRef50 FASTA) does **not** match the legacy `_test.faiss` which
+      indexes `UPI...`. Decide: rebuild FAISS over UniRef50 ids, or load a
+      UniParc-keyed FASTA, or override `PLMMSA_SEQUENCE_KEY_FORMAT`.
+- [ ] Run `build_sequence_cache` against the full FASTA (inside the worker
+      container or from the host).
+- [ ] Verify a handful of ids round-trip via `RedisTargetFetcher`.
 
 ### 5. Tokens + auth
 - [ ] `ADMIN_TOKEN` in `.env` rotated off `change-me`.

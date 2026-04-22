@@ -156,6 +156,72 @@ uv run hf download ElnaggarLab/ankh-large                   # shared tokenizer
 docker compose up -d embedding
 ```
 
+## UniRef50 sequence cache
+
+Step 4 of `PLAN.md`. The orchestrator's fetch stage pulls target sequences
+from Redis keyed as `seq:{id}`. Populate once per host; the keys live on
+`$CACHE_DATA_DIR` and survive `./bin/down.sh` / `up.sh`.
+
+### On the deepfold host
+
+The UniRef50 FASTA lives at:
+
+```
+/gpfs/database/casp16/uniref50/uniref50.fasta   # 26 GB, ~60 M sequences
+```
+
+### Quick subset validation (seconds)
+
+```bash
+head -2000 /gpfs/database/casp16/uniref50/uniref50.fasta > /tmp/uniref50_head.fasta
+docker compose up -d cache worker
+docker compose cp /tmp/uniref50_head.fasta worker:/tmp/uniref50_head.fasta
+docker compose exec -T worker uv run python -m plmmsa.tools.build_sequence_cache \
+    --fasta /tmp/uniref50_head.fasta --redis-url redis://cache:6379 --batch 200
+docker compose exec -T cache redis-cli --scan --pattern 'seq:UniRef50_*' | head
+```
+
+### Full load (~60 minutes)
+
+```bash
+docker compose up -d cache worker
+docker compose exec -T worker uv run python -m plmmsa.tools.build_sequence_cache \
+    --fasta /gpfs/database/casp16/uniref50/uniref50.fasta \
+    --redis-url redis://cache:6379 \
+    --batch 5000
+```
+
+Progress is logged every 10 batches. Redis AOF grows to roughly the same
+size as the FASTA. Disk usage stabilizes once the load finishes.
+
+### ID-format caveat
+
+`seq:{id}` is only useful if `{id}` matches what the VDB returns on
+`/search`. The legacy test FAISS at `ankh_uniref50_test.faiss` returns
+**UniParc `UPI...` ids**, whereas UniRef50 FASTA records use
+`UniRef50_...` ids — those two id spaces don't overlap. Three options,
+pick one:
+
+1. **Rebuild the FAISS index over UniRef50-ID-keyed embeddings.** The
+   clean long-term answer.
+2. **Load a UniParc-keyed FASTA** (keys match VDB ids directly).
+3. **Override `PLMMSA_SEQUENCE_KEY_FORMAT`** in `.env` to pick a prefix
+   that matches whatever id the VDB returns, then populate accordingly.
+
+Until this is decided, the stack will retrieve 0 target sequences from
+UniRef50-loaded seq cache for hits returned by the `_test` FAISS.
+
+### Clearing
+
+Targeted:
+
+```bash
+docker compose exec cache redis-cli --scan --pattern 'seq:*' | \
+    xargs -n 500 docker compose exec cache redis-cli del
+```
+
+Nuclear: see "Clearing the cache Redis" higher up in this file.
+
 ## Switching FAISS index size
 
 Step 3 of `PLAN.md`. Each `[vdb.collections.<name>]` block in

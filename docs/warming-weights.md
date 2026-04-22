@@ -109,12 +109,12 @@ Toggle in `settings.toml` under `[models.<name>].enabled`. Each enabled
 backend is loaded at `embedding` startup — disable the ones you don't
 need to cut boot time and GPU footprint.
 
-| Backend     | Checkpoint | GPU load | Default device env |
-| ----------- | ---------- | -------- | ------------------ |
-| `ankh_cl`   | ~4.4 GB    | ~6–8 GB  | `ANKH_CL_DEVICE`   |
-| `ankh_large`| ~15 GB     | ~16–20 GB| `ANKH_LARGE_DEVICE`|
-| `esm1b`     | ~4.9 GB    | ~5–7 GB  | `ESM1B_DEVICE`     |
-| `prott5`    | ~22 GB     | ~22–26 GB| `PROTTRANS_DEVICE` |
+| Backend      | Checkpoint | GPU load  | Default device env  |
+| ------------ | ---------- | --------- | ------------------- |
+| `ankh_cl`    | ~4.4 GB    | ~6–8 GB   | `ANKH_CL_DEVICE`    |
+| `ankh_large` | ~15 GB     | ~16–20 GB | `ANKH_LARGE_DEVICE` |
+| `esm1b`      | ~4.9 GB    | ~5–7 GB   | `ESM1B_DEVICE`      |
+| `prott5`     | ~22 GB     | ~22–26 GB | `PROTTRANS_DEVICE`  |
 
 On a 2×48 GB GPU host, all four fit comfortably when split across both
 cards. A sensible split for 2-GPU hosts:
@@ -149,9 +149,9 @@ Expect each enabled backend to appear under `models` with
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `OSError: [Errno 30] Read-only file system` on download attempt | `HF_HUB_OFFLINE=0` but mount is RO | Warm from host first, leave `HF_HUB_OFFLINE=1` |
-| Health shows a backend missing from `models` | Disabled in `settings.toml`, or `_load_*` threw (see `docker compose logs embedding`) | Re-enable + confirm checkpoint exists under `$HF_HOME/hub/` |
-| First `/embed` call is slow | First-pass CUDA kernel compilation | Warmup by calling `/embed` with a short sequence right after startup |
-| "Tokenizer not found" on Ankh-CL | `ElnaggarLab/ankh-large` tokenizer not cached | `hf download ElnaggarLab/ankh-large` (Ankh-CL reuses the Ankh-Large tokenizer) |
+| Symptom                                                         | Likely cause                                                                          | Fix                                                                            |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `OSError: [Errno 30] Read-only file system` on download attempt | `HF_HUB_OFFLINE=0` but mount is RO                                                    | Warm from host first, leave `HF_HUB_OFFLINE=1`                                 |
+| Health shows a backend missing from `models`                    | Disabled in `settings.toml`, or `_load_*` threw (see `docker compose logs embedding`) | Re-enable + confirm checkpoint exists under `$HF_HOME/hub/`                    |
+| First `/embed` call is slow                                     | First-pass CUDA kernel compilation                                                    | Warmup by calling `/embed` with a short sequence right after startup           |
+| "Tokenizer not found" on Ankh-CL                                | `ElnaggarLab/ankh-large` tokenizer not cached                                         | `hf download ElnaggarLab/ankh-large` (Ankh-CL reuses the Ankh-Large tokenizer) |
