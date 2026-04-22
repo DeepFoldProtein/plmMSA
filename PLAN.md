@@ -82,11 +82,15 @@ concrete `hf download` commands.
 - [ ] `docker compose up -d embedding` and confirm `GET /health` lists the resident PLMs with their device pins.
 
 ### 3. FAISS index
-- [ ] Pick the index size:
-  - For quick validation: `{collection}_test.faiss` (~250 MB) — point `[vdb.collections.ankh_uniref50].index_path` at it.
-  - For production: the full `{collection}_vdb.faiss` (~91 GB) — needs ~100 GB RAM to load.
-- [ ] Confirm VDB_DATA_DIR mount + index paths resolve from inside the `vdb` container (`docker compose logs vdb` on startup; FaissVDB rejects dim-mismatched indexes loudly).
-- [ ] Each enabled collection must match a PLM's embedding dim (`dim` field in settings).
+See [`docs/maintenance.md`](./docs/maintenance.md#switching-faiss-index-size)
+for the test-vs-full index swap recipe + a synthetic `/search` sanity check.
+- [ ] Pick the index size in `settings.toml` `[vdb.collections.<name>].index_path`:
+  - Quick validation: `{collection}_test.faiss` (~250 MB, loads in seconds).
+  - Production: `{collection}_vdb.faiss` (~90 GB, needs ~100 GB RAM).
+- [ ] `docker compose up -d vdb` and verify `GET /health` lists every
+      enabled collection with the expected `dim` (Ankh=1536, ESM-1b=1280).
+- [ ] Sanity-search with a synthetic 1536-dim (or 1280-dim) vector; expect
+      `k` UniRef ids back.
 
 ### 4. Sequence cache
 - [ ] UniRef50 FASTA available at a path operators can reach (`/gpfs` or a local download).

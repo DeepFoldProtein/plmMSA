@@ -156,6 +156,44 @@ uv run hf download ElnaggarLab/ankh-large                   # shared tokenizer
 docker compose up -d embedding
 ```
 
+## Switching FAISS index size
+
+Step 3 of `PLAN.md`. Each `[vdb.collections.<name>]` block in
+`settings.toml` names an `index_path` relative to `VDB_DATA_DIR`. Two
+variants typically ship side-by-side under the same collection directory:
+
+| Variant  | Filename pattern              | Size     | Loads in             | Use for                           |
+| -------- | ----------------------------- | -------- | -------------------- | --------------------------------- |
+| test     | `{collection}_test.faiss`     | ~250 MB  | seconds, <1 GB RAM   | bring-up / validation / CI        |
+| full     | `{collection}_vdb.faiss`      | ~90 GB   | minutes, ~100 GB RAM | production MSA generation         |
+
+Swap in place:
+
+```bash
+# point both collections at the test variant
+sed -i 's/_vdb\.faiss/_test.faiss/g' settings.toml
+sed -i 's/_vdb\.faiss_id_mapping/_test.faiss_id_mapping/g' settings.toml
+docker compose up -d --no-deps vdb
+docker compose exec vdb curl -s http://localhost:8082/health | jq
+```
+
+Each collection's `dim` must match the PLM that populated it (Ankh = 1536,
+ESM-1b = 1280). `FaissVDB` rejects a dim-mismatched index loudly on load —
+check `docker compose logs vdb` if `/health` shows a collection missing.
+
+Sanity check with a synthetic vector (no embedding service needed):
+
+```bash
+python3 -c 'import json, random; random.seed(0); print(json.dumps(
+    {"collection":"ankh_uniref50",
+     "vectors":[[random.gauss(0,1) for _ in range(1536)]],
+     "k":5}))' | \
+    docker compose exec -T vdb sh -c \
+    'curl -sX POST http://localhost:8082/search -H "Content-Type: application/json" -d @-'
+```
+
+You should get back five UniRef ids with distances.
+
 ## Updating settings
 
 `settings.toml` holds non-secret tunables (per-PLM `enabled`, VDB collection
