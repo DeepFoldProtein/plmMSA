@@ -120,9 +120,21 @@ acid sequence and `tax:{id}` → NCBI TaxID (parsed from the UniRef50 header).
 - [ ] Submit T1120 from the regression fixtures; job succeeds; `result.format=a3m`, `result.stats.hits_fetched > 0`.
 
 ### 7. Public edge (Cloudflare Tunnel)
+See [`docs/cloudflare-tunnel.md`](./docs/cloudflare-tunnel.md). The tunnel
+runs as `cloudflared` behind the `tunnel` compose profile; it joins
+`plmmsa_net` and forwards the public hostname → `api:8080`. Cloudflared
+registers 4 QUIC connections to the nearest CF edges (on deepfold: ICN05 +
+ICN06, Seoul/Incheon).
 - [ ] Tunnel created in Zero Trust dashboard, `CLOUDFLARE_TUNNEL_TOKEN` in `.env`.
-- [ ] Public hostname points to `api:8080` ONLY — never `/admin/*`, never any other service.
+- [ ] Public hostname points to `api:8080` (confirmed by checking
+      `docker compose logs cloudflared` for the registered ingress rule).
 - [ ] `docker compose --profile tunnel up -d` and verify `curl https://plmmsa.deepfold.org/health`.
+- [ ] **Lock down `/admin/*`.** The tunnel forwards *every* path on the
+      hostname, so `/admin/tokens` is reachable (401-gated, but still a
+      surface). Either (a) add a path filter in the CF dashboard that 404s
+      `/admin/*`, or (b) gate with a Cloudflare Access policy, or (c) move
+      admin routes behind a separate internal-only FastAPI app that is
+      not in the tunnel ingress. Recommended: (a) for the quickest ship.
 - [ ] Institutional sign-off on public availability.
 
 ### 8. Regression
