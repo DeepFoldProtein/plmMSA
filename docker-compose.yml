@@ -16,12 +16,13 @@ services:
       EMBEDDING_URL: http://embedding:8081
       VDB_URL: http://vdb:8082
       ALIGN_URL: http://align:8083
-      CACHE_URL: redis://cache:6379
+      # Operational Redis (jobs + tokens + rate limits).
+      CACHE_URL: redis://cache-ops:6379
       ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
     depends_on:
-      cache:
+      cache-ops:
         condition: service_healthy
       embedding:
         condition: service_started
@@ -62,7 +63,7 @@ services:
       # locked-down deployment.
       - ${MODEL_CACHE_DIR:-./model_cache}:/model_cache
     depends_on:
-      cache:
+      cache-emb:
         condition: service_healthy
     networks: [plmmsa_net]
     # TODO: tune `count` / `device_ids` once the embedding server is implemented
@@ -83,12 +84,14 @@ services:
     environment:
       PLMMSA_SETTINGS_FILE: /app/settings.toml
       VDB_DATA_DIR: /vdb_data
-      CACHE_URL: redis://cache:6379
+      # vdb itself has no Redis usage yet; placeholder for future shard/meta
+      # lookups if we bring the legacy Redis metadb into the service.
+      CACHE_URL: redis://cache-ops:6379
     volumes:
       - ./settings.toml:/app/settings.toml:ro
       - ${VDB_DATA_DIR:-./vdb_data}:/vdb_data:ro
     depends_on:
-      cache:
+      cache-ops:
         condition: service_healthy
     networks: [plmmsa_net]
     restart: unless-stopped
@@ -110,12 +113,61 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  cache:
+  # Three dedicated Redis instances, split by role so eviction policies,
+  # restart times, and persistence cadences can be tuned independently.
+  # Persistence dirs are host-controlled via `.env`; see docs/maintenance.md.
+
+  # Operational store: job queue + records, admin tokens, rate-limit counters.
+  # Small working set, crash-safety matters → AOF on, no RDB, noeviction.
+  cache-ops:
     image: redis:7.4-alpine
-    # Redis persistence lives on the host so it survives container rebuilds
-    # and compose down. Path is controlled by `CACHE_DATA_DIR` in `.env`.
+    command: >
+      redis-server
+      --appendonly yes
+      --save ""
+      --maxmemory-policy noeviction
     volumes:
-      - ${CACHE_DATA_DIR:-./cache_data}:/data
+      - ${CACHE_OPS_DATA_DIR:-./cache_ops_data}:/data
+    networks: [plmmsa_net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  # Sequence + taxonomy store: UniRef50 `seq:*` and `tax:*` lookups, plus any
+  # future corpus/id maps. Big, read-mostly, rebuildable from source FASTAs →
+  # RDB only, no AOF, noeviction by default (cap with --maxmemory if needed).
+  cache-seq:
+    image: redis:7.4-alpine
+    command: >
+      redis-server
+      --appendonly no
+      --save "3600 1 600 10000 60 1000000"
+      --maxmemory-policy ${CACHE_SEQ_POLICY:-noeviction}
+    volumes:
+      - ${CACHE_SEQ_DATA_DIR:-./cache_seq_data}:/data
+    networks: [plmmsa_net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  # Embedding cache: PLM-level per-residue / pooled embedding results.
+  # Hot, rebuildable (just re-embed) → RDB snapshots + LRU eviction, capped.
+  cache-emb:
+    image: redis:7.4-alpine
+    command: >
+      redis-server
+      --appendonly no
+      --save "3600 1 600 10000"
+      --maxmemory ${CACHE_EMB_MAXMEMORY:-0}
+      --maxmemory-policy ${CACHE_EMB_POLICY:-allkeys-lru}
+    volumes:
+      - ${CACHE_EMB_DATA_DIR:-./cache_emb_data}:/data
     networks: [plmmsa_net]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -147,19 +199,26 @@ services:
       dockerfile: services/worker/Dockerfile
     environment:
       PLMMSA_SETTINGS_FILE: /app/settings.toml
-      CACHE_URL: redis://cache:6379
+      # Worker reads jobs from cache-ops and fetches sequences / tax / embed
+      # hits from cache-seq / cache-emb. Separate URLs per role.
+      CACHE_URL: redis://cache-ops:6379
       EMBEDDING_URL: http://embedding:8081
       VDB_URL: http://vdb:8082
       ALIGN_URL: http://align:8083
-      # Sequence-fetcher selection (plmmsa.worker.__main__._build_fetcher).
-      # Populate once per collection with:
-      #   python -m plmmsa.tools.build_sequence_cache --fasta <f> --redis-url <u>
-      PLMMSA_SEQUENCE_REDIS_URL: ${PLMMSA_SEQUENCE_REDIS_URL:-redis://cache:6379}
+      # Sequence + tax lookups.
+      PLMMSA_SEQUENCE_REDIS_URL: ${PLMMSA_SEQUENCE_REDIS_URL:-redis://cache-seq:6379}
       PLMMSA_SEQUENCE_KEY_FORMAT: ${PLMMSA_SEQUENCE_KEY_FORMAT:-seq:{id}}
+      PLMMSA_TAX_KEY_FORMAT: ${PLMMSA_TAX_KEY_FORMAT:-tax:{id}}
+      # Embedding result cache.
+      PLMMSA_EMB_REDIS_URL: ${PLMMSA_EMB_REDIS_URL:-redis://cache-emb:6379}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
     depends_on:
-      cache:
+      cache-ops:
+        condition: service_healthy
+      cache-seq:
+        condition: service_healthy
+      cache-emb:
         condition: service_healthy
     networks: [plmmsa_net]
     restart: unless-stopped

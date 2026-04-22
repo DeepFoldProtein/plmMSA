@@ -92,17 +92,20 @@ for the test-vs-full index swap recipe + a synthetic `/search` sanity check.
 - [ ] Sanity-search with a synthetic 1536-dim (or 1280-dim) vector; expect
       `k` UniRef ids back.
 
-### 4. Sequence cache
-See [`docs/maintenance.md#uniref50-sequence-cache`](./docs/maintenance.md#uniref50-sequence-cache)
-for the full recipe (subset validation + full 60-min load + id-format caveat).
-- [ ] UniRef50 FASTA reachable from the host (deepfold: `/gpfs/database/casp16/uniref50/uniref50.fasta`, 26 GB).
-- [ ] Pick an id scheme that matches the active FAISS index — `UniRef50_*`
-      (UniRef50 FASTA) does **not** match the legacy `_test.faiss` which
-      indexes `UPI...`. Decide: rebuild FAISS over UniRef50 ids, or load a
-      UniParc-keyed FASTA, or override `PLMMSA_SEQUENCE_KEY_FORMAT`.
-- [ ] Run `build_sequence_cache` against the full FASTA (inside the worker
-      container or from the host).
-- [ ] Verify a handful of ids round-trip via `RedisTargetFetcher`.
+### 4. Sequence + taxonomy cache (cache-seq)
+See [`docs/maintenance.md#uniref50-sequence-cache`](./docs/maintenance.md#uniref50-sequence-cache).
+`build_sequence_cache` emits two key spaces per record: `seq:{id}` → amino
+acid sequence and `tax:{id}` → NCBI TaxID (parsed from the UniRef50 header).
+- [ ] UniRef50 FASTA reachable (deepfold: `/gpfs/database/casp16/uniref50/uniref50.fasta`, 26 GB, ~60 M records).
+- [ ] Pick an id scheme that matches the active FAISS index. UniRef50 FASTA
+      keys are `UniRef50_*`; the legacy `_test.faiss` returns UniParc
+      `UPI...`. Resolution options: rebuild FAISS over UniRef50 ids, or
+      load a UniParc-keyed FASTA, or override `PLMMSA_SEQUENCE_KEY_FORMAT`.
+- [ ] Run `build_sequence_cache` against the FASTA — `seq:*` + `tax:*`
+      both populate into `cache-seq` (Redis URL from
+      `PLMMSA_SEQUENCE_REDIS_URL`).
+- [ ] Verify a handful of ids: `seq:{id}` returns the sequence, `tax:{id}`
+      returns the TaxID, round-trippable via `RedisTargetFetcher`.
 
 ### 5. Tokens + auth
 - [ ] `ADMIN_TOKEN` in `.env` rotated off `change-me`.

@@ -37,52 +37,67 @@ the `plmmsa_net` bridge. To add the public edge, use
 
 `.env` keys that determine on-host paths:
 
-| Key               | Default         | Used by                                       |
-| ----------------- | --------------- | --------------------------------------------- |
-| `MODEL_CACHE_DIR` | `./model_cache` | `embedding` — PLM weights (HuggingFace cache) |
-| `VDB_DATA_DIR`    | `./vdb_data`    | `vdb` — FAISS index + id-mapping pickles      |
-| `CACHE_DATA_DIR`  | `./cache_data`  | `cache` — Redis persistence (AOF / RDB)       |
+| Key                  | Default              | Used by |
+| -------------------- | -------------------- | ------- |
+| `MODEL_CACHE_DIR`    | `./model_cache`      | `embedding` — PLM weights (HuggingFace cache) |
+| `VDB_DATA_DIR`       | `./vdb_data`         | `vdb` — FAISS index + id-mapping pickles |
+| `CACHE_OPS_DATA_DIR` | `./cache_ops_data`   | `cache-ops` — jobs, tokens, rate limits (AOF) |
+| `CACHE_SEQ_DATA_DIR` | `./cache_seq_data`   | `cache-seq` — `seq:*` + `tax:*` lookups (RDB) |
+| `CACHE_EMB_DATA_DIR` | `./cache_emb_data`   | `cache-emb` — PLM embedding cache (RDB + LRU) |
 
-Point these at `/gpfs` or similar for multi-machine persistence; keep them
+Point these at `/gpfs` or `/store` for multi-machine persistence; keep them
 local for a single-host dev deployment.
 
-## Clearing the cache Redis
+## Three Redis instances, one per role
 
-The `cache` Redis holds three kinds of data:
+| Instance    | Image            | Holds                                      | Persistence   | Eviction       | Typical size |
+| ----------- | ---------------- | ------------------------------------------ | ------------- | -------------- | ------------ |
+| `cache-ops` | redis:7.4-alpine | `plmmsa:job:*`, `plmmsa:queue`, `admintoken:*` | AOF on, no RDB | `noeviction`   | MBs          |
+| `cache-seq` | redis:7.4-alpine | `seq:*`, `tax:*` (UniRef50 + taxonomy)      | RDB snapshots | `noeviction` (configurable via `CACHE_SEQ_POLICY`) | ~30 GB   |
+| `cache-emb` | redis:7.4-alpine | PLM embedding cache entries                 | RDB snapshots | `allkeys-lru`  | capped by `CACHE_EMB_MAXMEMORY` |
 
-- **Job records + queue** — `plmmsa:job:*`, `plmmsa:queue`.
-- **Admin tokens** — `admintoken:rec:*`, `admintoken:hash:*`, `admintoken:all`.
-- **Sequence lookup** (populated by `plmmsa.tools.build_sequence_cache`) —
-  `seq:*` by default.
+Why three instead of one:
 
-The sequence store is by far the largest after a UniRef50 load. Three ways
-to reclaim disk when it's no longer useful, in increasing severity:
+- **Eviction.** `cache-emb` can evict safely (embeddings are rebuildable);
+  `cache-ops` must never evict (you'd lose a queued job or revoke a token
+  by accident). A single Redis can't have two policies at once.
+- **Restart time.** `cache-ops` reloads in a second and the API is live;
+  `cache-seq` takes minutes to replay the UniRef50 RDB but nothing
+  user-facing depends on it at that moment.
+- **Blast radius.** A bug that FLUSHDBs the wrong instance is less bad
+  when roles are isolated.
+
+## Clearing / wiping
+
+Per-role, non-destructive:
 
 ```bash
-# 1. Drop only the sequence cache, keep queue + tokens.
-docker compose exec cache redis-cli --scan --pattern 'seq:*' | \
-    xargs -n 500 docker compose exec cache redis-cli del
+# Drop just the sequence cache (keep queue + tokens + embedding cache).
+docker compose exec cache-seq redis-cli --scan --pattern 'seq:*' | \
+    xargs -n 500 docker compose exec cache-seq redis-cli del
 
-# 2. Flush the whole Redis database. Queue + tokens + seq cache all gone.
-docker compose exec cache redis-cli FLUSHDB
-
-# 3. Full wipe: stop compose, delete the host directory, start fresh. This
-#    is the fastest way to bring Redis up with a clean, small on-disk file
-#    after many writes; the AOF bloats over time and compaction is slow.
-./bin/down.sh
-rm -rf "$(grep '^CACHE_DATA_DIR=' .env | cut -d= -f2-)/*"
-./bin/up.sh
+# Drop just the embedding cache.
+docker compose exec cache-emb redis-cli FLUSHDB
 ```
 
-**Why "clear cache_data for fast loading" matters:** Redis AOF replay on
-startup can take minutes for a heavily-written UniRef50 cache. If you only
-need the cache for a short-lived benchmark and don't need persistence across
-restarts, delete `CACHE_DATA_DIR/*` between runs — Redis comes up cold and
-fast. The sequence cache is trivially rebuildable from the source FASTA:
+Per-instance wipe (fast restart when AOF/RDB growth hurts):
+
+```bash
+./bin/down.sh
+rm -rf "$(grep '^CACHE_SEQ_DATA_DIR=' .env | cut -d= -f2-)"/*
+./bin/up.sh
+# Re-run build_sequence_cache to repopulate.
+```
+
+**Why "clear `cache_seq_data` for fast loading" matters:** a 30 GB RDB
+takes 1–3 minutes to replay on Redis startup. If you're iterating on
+schema / id-format changes, wiping the data dir between runs is cheaper
+than a BGREWRITE. The sequence + tax data is trivially rebuildable from
+the source FASTA:
 
 ```bash
 uv run python -m plmmsa.tools.build_sequence_cache \
-    --fasta /path/to/uniref50.fasta \
+    --fasta /gpfs/database/casp16/uniref50/uniref50.fasta \
     --redis-url redis://localhost:6379
 ```
 
@@ -159,8 +174,9 @@ docker compose up -d embedding
 ## UniRef50 sequence cache
 
 Step 4 of `PLAN.md`. The orchestrator's fetch stage pulls target sequences
-from Redis keyed as `seq:{id}`. Populate once per host; the keys live on
-`$CACHE_DATA_DIR` and survive `./bin/down.sh` / `up.sh`.
+from `cache-seq` (Redis) keyed as `seq:{id}`, and the companion taxonomy
+lookup from `tax:{id}`. Populate once per host; the keys live on
+`$CACHE_SEQ_DATA_DIR` and survive `./bin/down.sh` / `up.sh`.
 
 ### On the deepfold host
 
@@ -173,26 +189,35 @@ The UniRef50 FASTA lives at:
 ### Quick subset validation (seconds)
 
 ```bash
-head -2000 /gpfs/database/casp16/uniref50/uniref50.fasta > /tmp/uniref50_head.fasta
-docker compose up -d cache worker
+head -50000 /gpfs/database/casp16/uniref50/uniref50.fasta > /tmp/uniref50_head.fasta
+docker compose up -d cache-seq worker
 docker compose cp /tmp/uniref50_head.fasta worker:/tmp/uniref50_head.fasta
 docker compose exec -T worker uv run python -m plmmsa.tools.build_sequence_cache \
-    --fasta /tmp/uniref50_head.fasta --redis-url redis://cache:6379 --batch 200
-docker compose exec -T cache redis-cli --scan --pattern 'seq:UniRef50_*' | head
+    --fasta /tmp/uniref50_head.fasta --redis-url redis://cache-seq:6379 --batch 200
+# spot-check a few ids for both seq and tax
+for id in $(docker compose exec -T cache-seq redis-cli --scan --pattern 'seq:UniRef50_*' | head -3); do
+    name="${id#seq:}"
+    echo -n "$name  seq len: "; docker compose exec -T cache-seq redis-cli STRLEN "seq:$name"
+    echo -n "$name  tax id:  "; docker compose exec -T cache-seq redis-cli GET "tax:$name"
+done
 ```
 
-### Full load (~60 minutes)
+### Full load
 
 ```bash
-docker compose up -d cache worker
-docker compose exec -T worker uv run python -m plmmsa.tools.build_sequence_cache \
-    --fasta /gpfs/database/casp16/uniref50/uniref50.fasta \
-    --redis-url redis://cache:6379 \
+docker compose up -d cache-seq worker
+docker compose run --rm \
+    -v /gpfs/database/casp16/uniref50:/uniref-src:ro \
+    worker uv run python -m plmmsa.tools.build_sequence_cache \
+    --fasta /uniref-src/uniref50.fasta \
+    --redis-url redis://cache-seq:6379 \
     --batch 5000
 ```
 
-Progress is logged every 10 batches. Redis AOF grows to roughly the same
-size as the FASTA. Disk usage stabilizes once the load finishes.
+On the deepfold host this runs at ~50 k keys/sec (measured on the
+2-GPU deepfold host, writing to the `/store` NFS mount) — ~20 minutes for
+the full ~60 M UniRef50 records. Every record emits both a `seq:*` and a
+`tax:*` key, so final DBSIZE is ~120 M.
 
 ### ID-format caveat
 
@@ -213,14 +238,15 @@ UniRef50-loaded seq cache for hits returned by the `_test` FAISS.
 
 ### Clearing
 
-Targeted:
+Targeted (keep tax, drop seq):
 
 ```bash
-docker compose exec cache redis-cli --scan --pattern 'seq:*' | \
-    xargs -n 500 docker compose exec cache redis-cli del
+docker compose exec cache-seq redis-cli --scan --pattern 'seq:*' | \
+    xargs -n 500 docker compose exec cache-seq redis-cli del
 ```
 
-Nuclear: see "Clearing the cache Redis" higher up in this file.
+Nuke the whole seq + tax store: `docker compose exec cache-seq redis-cli FLUSHDB`.
+Wipe on-disk: see "Clearing / wiping" higher up in this file.
 
 ## Switching FAISS index size
 
