@@ -147,6 +147,11 @@ Expect each enabled backend to appear under `models` with
 4. Warm its checkpoint with `uv run hf download <repo>`.
 5. Restart the embedding service.
 
+## See also
+
+- Populating the sequence cache (UniRef50 FASTA → Redis):
+  [`docs/maintenance.md#uniref50-sequence-cache`](./maintenance.md#uniref50-sequence-cache).
+
 ## Troubleshooting
 
 | Symptom                                                         | Likely cause                                                                          | Fix                                                                            |
