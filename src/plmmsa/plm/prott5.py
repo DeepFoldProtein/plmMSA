@@ -20,7 +20,11 @@ class ProtT5(PLM):
 
     def __init__(self, device: str | torch.device = "cuda:1", hf_id: str = _HF_ID) -> None:
         self.device = torch.device(device)
-        self.tokenizer = AutoTokenizer.from_pretrained(hf_id, do_lower_case=False)
+        # Rostlab's ProtT5 ships a SentencePiece vocab that `transformers`
+        # can't convert to its Unigram fast-tokenizer. Force the slow path.
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            hf_id, do_lower_case=False, use_fast=False
+        )
         model = T5EncoderModel.from_pretrained(hf_id)
         self.model = model.to(self.device)  # pyright: ignore[reportArgumentType]
         self.model.eval()
