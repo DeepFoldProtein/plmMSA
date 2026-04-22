@@ -51,6 +51,20 @@ class SubmitRequest(BaseModel):
     model: str = Field("ankh_cl", description="PLM backend id.")
     output_format: str = Field("a3m", description="Wire format: a3m | stockholm | ...")
     paired: bool = Field(False, description="Produce paired MSA across chains.")
+    # Orchestrator knobs (optional; the orchestrator supplies defaults).
+    query_id: str | None = Field(None, description="Shown in the A3M query header.")
+    collection: str | None = Field(
+        None,
+        description="VDB collection id; defaults to `<model>_uniref50`.",
+    )
+    k: int | None = Field(
+        None, ge=1, le=10_000, description="Number of FAISS neighbors to fetch."
+    )
+    aligner: str | None = Field(None, description="Aligner id (default: plmalign).")
+    mode: str | None = Field(None, description="local | global.")
+    options: dict[str, Any] | None = Field(
+        None, description="Pass-through aligner kwargs (gap_open, gap_extend, ...)."
+    )
 
 
 class SubmitResponse(BaseModel):

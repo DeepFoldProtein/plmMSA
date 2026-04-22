@@ -84,7 +84,7 @@ class Orchestrator:
 
             target_embs = await self._embed_targets(http, model, target_seqs)
             alignments = await self._align(
-                http, aligner, mode, query_emb, target_embs, request.get("options", {})
+                http, aligner, mode, query_emb, target_embs, request.get("options") or {}
             )
 
         score_by_id = {n["id"]: float(n.get("distance", 0.0)) for n in neighbors}
