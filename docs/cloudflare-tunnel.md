@@ -120,3 +120,28 @@ The plan keeps the operator admin page on the **internal** network only —
 never add a public hostname for it. If you need remote admin access, route
 it through your VPN or Cloudflare Access (an Access policy in front of a
 separate hostname), not anonymous tunnel traffic.
+
+### ⚠ Known limitation: `/admin/*` is path-reachable through the tunnel
+
+When you route `plmmsa.deepfold.org` → `http://api:8080` the tunnel
+forwards *every* path, including `/admin/tokens`. The admin routes are
+bearer-token gated (see `plmmsa.api.auth.require_admin_token`), so an
+unauthenticated request gets `401 E_AUTH_MISSING`. That's a real defense,
+but the route is still exposed on the public hostname.
+
+Close this in the CF Zero Trust dashboard. Edit the tunnel's **Public
+Hostnames** page and add a second ingress rule with **Path = `/admin/*`**
+pointing at a service that returns a 404 (or use the built-in "HTTP
+response" origin type to return 404 for matched paths). Order matters —
+the 404 rule must come *before* the `/` catch-all rule that targets
+`api:8080`. Verify with:
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' https://plmmsa.deepfold.org/admin/tokens
+# expect 404, not 401
+```
+
+Until this is configured, treat the bootstrap `ADMIN_TOKEN` as
+directly-guessable credential material: rotate it often, and mint
+per-client tokens so the bootstrap isn't used for day-to-day traffic
+(see docs/maintenance.md).
