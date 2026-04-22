@@ -58,6 +58,10 @@ def submit_and_wait(
     target: TargetSpec,
     poll_interval: float,
     poll_timeout: float,
+    collection: str,
+    k: int,
+    aligner: str,
+    mode: str,
 ) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {token}"}
     submit = client.post(
@@ -67,6 +71,10 @@ def submit_and_wait(
             "sequences": [target.query_seq],
             "query_id": target.name,
             "model": "ankh_cl",
+            "collection": collection,
+            "k": k,
+            "aligner": aligner,
+            "mode": mode,
         },
     )
     submit.raise_for_status()
@@ -122,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--poll-timeout", type=float, default=600.0)
     parser.add_argument("--token", default=os.environ.get("ADMIN_TOKEN", ""))
+    parser.add_argument("--collection", default="ankh_uniref50")
+    parser.add_argument("--k", type=int, default=50, help="FAISS neighbors per query.")
+    parser.add_argument("--aligner", default="plmalign")
+    parser.add_argument("--mode", default="local")
     args = parser.parse_args(argv)
 
     if not args.token:
@@ -147,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
                     target,
                     args.poll_interval,
                     args.poll_timeout,
+                    args.collection,
+                    args.k,
+                    args.aligner,
+                    args.mode,
                 )
             except Exception as exc:
                 print(f"  FAIL: {exc}")

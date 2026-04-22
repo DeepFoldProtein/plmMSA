@@ -25,6 +25,10 @@ class OrchestratorConfig:
     default_aligner: str = "plmalign"
     default_mode: str = "local"
     default_k: int = 100
+    # Cap on how many target sequences are batched per embedding request.
+    # Higher = fewer round-trips, more peak GPU memory. 64 is a safe default
+    # for ankh_cl on a 48 GB GPU when sequences are <= ~1000 residues.
+    embed_chunk_size: int = 64
 
 
 class Orchestrator:
@@ -139,13 +143,22 @@ class Orchestrator:
     async def _embed_targets(
         self, http: httpx.AsyncClient, model: str, seqs: list[str]
     ) -> list[np.ndarray]:
-        resp = await http.post(
-            f"{self._config.embedding_url}/embed",
-            json={"model": model, "sequences": seqs},
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        return [np.asarray(e, dtype=np.float32) for e in body["embeddings"]]
+        """Batch `seqs` through the embedding service in chunks of
+        `embed_chunk_size` to keep peak GPU memory bounded. A single big
+        request with hundreds of 500-residue targets can blow an `ankh_cl`
+        forward pass past 47 GB; splitting caps the working set."""
+        chunk = max(1, self._config.embed_chunk_size)
+        out: list[np.ndarray] = []
+        for start in range(0, len(seqs), chunk):
+            batch = seqs[start : start + chunk]
+            resp = await http.post(
+                f"{self._config.embedding_url}/embed",
+                json={"model": model, "sequences": batch},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            out.extend(np.asarray(e, dtype=np.float32) for e in body["embeddings"])
+        return out
 
     async def _search(
         self,
