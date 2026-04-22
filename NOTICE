@@ -1,0 +1,36 @@
+plmMSA
+======
+
+This repository is a clean rebase and evolution of PLMAlign:
+
+  https://github.com/DeepFoldProtein/PLMAlign
+
+PLMAlign itself builds on PLMSearch (Liu et al., Nat. Commun. 15, 2775, 2024)
+and incorporates ideas from pLM-BLAST and deepblast. Portions of the original
+PLMAlign codebase are licensed under the MIT License with the following
+copyrights:
+
+  Copyright (c) 2023 Wei Liu
+  Copyright (c) 2022 Laboratory of Structural Bioinformatics
+
+Model weights loaded by plmMSA are distributed by their respective authors
+under their own license terms, which apply independently of this repository:
+
+  - Ankh and Ankh-Large (ElnaggarLab)  ..... Apache License 2.0
+  - ESM1b (Meta AI / facebookresearch/esm)  MIT License
+  - ProtT5 (Rostlab)  .......................custom RostLab license
+
+Users are responsible for complying with the terms of each weight license
+when downloading, serving, or redistributing model artifacts.
+
+Vendored code
+-------------
+
+`src/procl/` is a cleaned vendor copy of
+
+  DeepFoldProtein/DeepFold-PLM -> plmMSA/src/procl
+
+originally authored by Hanjin Bae <iwdhanjin@gmail.com>. The upstream project
+does not ship procl as a standalone distribution, so the source is committed
+in-tree here. Significant edits (formatting, trimmed unused imports, type
+hints) have been applied — see git history for the diff.

@@ -1,0 +1,29 @@
+{
+  "_comment": "Baseline stats lifted from the legacy PLMAlign/final_bench/results/<target>/msas/vdb_ankh_esm1b_faiss/ tree (ankh+esm1b+faiss pipeline, pre-rebase). Use as targets for the local regression harness (bench/run_regression.py). The CI sanity test only checks shape; numeric comparisons live outside CI because they need live services.",
+  "targets": {
+    "T1104": {
+      "query_len": 117,
+      "msa_depth": 1347,
+      "scored_hits": 1539,
+      "top_hit": { "id": "T1104", "score": 42.93 },
+      "second_hit": { "id": "G0IAM1", "score": 31.91 },
+      "tolerance": { "depth_pct": 10.0, "score_abs": 2.0 }
+    },
+    "T1120": {
+      "query_len": 235,
+      "msa_depth": 1628,
+      "scored_hits": 1824,
+      "top_hit": { "id": "T1120", "score": 39.88 },
+      "second_hit": { "id": "Q9RYE6", "score": 39.15 },
+      "tolerance": { "depth_pct": 10.0, "score_abs": 2.0 }
+    },
+    "T1132": {
+      "query_len": 102,
+      "msa_depth": 1520,
+      "scored_hits": 1520,
+      "top_hit": { "id": "T1132", "score": 40.40 },
+      "second_hit": { "id": "A0A9X4PQJ5", "score": 38.88 },
+      "tolerance": { "depth_pct": 10.0, "score_abs": 2.0 }
+    }
+  }
+}

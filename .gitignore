@@ -1,0 +1,42 @@
+# Secrets and local config — never commit.
+.env
+.env.*.local
+settings.toml
+
+# Internal design doc — kept out of the public repo.
+CLAUDE.md
+
+# Bind-mount artifacts managed by docker-compose. Default host paths for
+# MODEL_CACHE_DIR / VDB_DATA_DIR / CACHE_DATA_DIR when left relative.
+redis_data/
+model_cache/
+vdb_data/
+cache_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# uv / pip
+.uv/
+.python-version
+
+# Tool caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+
+# IDE / editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store

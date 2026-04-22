@@ -1,0 +1,85 @@
+[project]
+name = "plmmsa"
+version = "0.1.0"
+description = "PLM-based MSA server (rebase of DeepFoldProtein/PLMAlign)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "DeepFold Team" }]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
+    "redis>=5.2",
+    # numpy is used by plmmsa.align (PLMAlign SW/NW DP) and the orchestrator
+    # (array construction before forwarding to services). Not optional.
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+embedding = [
+    # torch 2.11 ships CUDA 13 runtime and refuses to init on the deepfold
+    # host's 555.x driver (CUDA 12.5). Staying on the 2.4–2.8 band, which
+    # ships CUDA 12.1 wheels that work with any driver >= 530.
+    "torch>=2.4,<2.9",
+    # procl's AnkhCL was authored against transformers 4.x; 5.x moved
+    # `all_tied_weights_keys` in a way that breaks weight-tying on load.
+    "transformers>=4.44,<5",
+    "huggingface-hub>=0.25",
+    "sentencepiece>=0.2",
+    "protobuf>=5.28",
+]
+vdb = [
+    "faiss-cpu>=1.8",
+]
+
+# NOTE: `procl` is vendored under `src/procl/` rather than declared as a
+# dependency because the upstream source at
+# DeepFoldProtein/DeepFold-PLM/plmMSA/src/procl has no pyproject.toml and its
+# enclosing setup.py declares a distribution name ("plmMSA") that would
+# collide with ours under PEP 503 normalization. See NOTICE for attribution.
+
+[project.scripts]
+plmmsa = "plmmsa.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plmmsa", "src/procl"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7",
+    "pyright>=1.1.390",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "fakeredis>=2.26",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# DP score matrices follow the math convention (M / X / Y).
+"src/plmmsa/align/plmalign.py" = ["N803", "N806"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+addopts = "-ra -q"
+testpaths = ["tests"]
+asyncio_mode = "auto"

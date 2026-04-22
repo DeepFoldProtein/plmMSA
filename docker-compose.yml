@@ -1,0 +1,157 @@
+name: ${COMPOSE_PROJECT_NAME:-plmmsa}
+
+networks:
+  plmmsa_net:
+    driver: bridge
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    environment:
+      PLMMSA_SETTINGS_FILE: /app/settings.toml
+      EMBEDDING_URL: http://embedding:8081
+      VDB_URL: http://vdb:8082
+      ALIGN_URL: http://align:8083
+      CACHE_URL: redis://cache:6379
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
+    volumes:
+      - ./settings.toml:/app/settings.toml:ro
+    depends_on:
+      cache:
+        condition: service_healthy
+      embedding:
+        condition: service_started
+      vdb:
+        condition: service_started
+      align:
+        condition: service_started
+    networks: [plmmsa_net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  embedding:
+    build:
+      context: .
+      dockerfile: services/embedding/Dockerfile
+    environment:
+      PLMMSA_SETTINGS_FILE: /app/settings.toml
+      MODEL_CACHE_DIR: /model_cache
+      ANKH_CL_DEVICE: ${ANKH_CL_DEVICE:-cuda:0}
+      ANKH_LARGE_DEVICE: ${ANKH_LARGE_DEVICE:-cuda:0}
+      ESM1B_DEVICE: ${ESM1B_DEVICE:-cuda:1}
+      PROTTRANS_DEVICE: ${PROTTRANS_DEVICE:-cuda:2}
+      ANKH_CL_CHECKPOINT: ${ANKH_CL_CHECKPOINT:-}
+    volumes:
+      - ./settings.toml:/app/settings.toml:ro
+      - ${MODEL_CACHE_DIR:-./model_cache}:/model_cache:ro
+    depends_on:
+      cache:
+        condition: service_healthy
+    networks: [plmmsa_net]
+    # TODO: tune `count` / `device_ids` once the embedding server is implemented
+    # and we know which GPUs should be pinned to this container.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              count: all
+    restart: unless-stopped
+
+  vdb:
+    build:
+      context: .
+      dockerfile: services/vdb/Dockerfile
+    environment:
+      PLMMSA_SETTINGS_FILE: /app/settings.toml
+      VDB_DATA_DIR: /vdb_data
+      CACHE_URL: redis://cache:6379
+    volumes:
+      - ./settings.toml:/app/settings.toml:ro
+      - ${VDB_DATA_DIR:-./vdb_data}:/vdb_data:ro
+    depends_on:
+      cache:
+        condition: service_healthy
+    networks: [plmmsa_net]
+    restart: unless-stopped
+
+  align:
+    build:
+      context: .
+      dockerfile: services/align/Dockerfile
+    environment:
+      PLMMSA_SETTINGS_FILE: /app/settings.toml
+    volumes:
+      - ./settings.toml:/app/settings.toml:ro
+    networks: [plmmsa_net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8083/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  cache:
+    image: redis:7.4-alpine
+    # Redis persistence lives on the host so it survives container rebuilds
+    # and compose down. Path is controlled by `CACHE_DATA_DIR` in `.env`.
+    volumes:
+      - ${CACHE_DATA_DIR:-./cache_data}:/data
+    networks: [plmmsa_net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  # Public edge. Off by default; opt in with `docker compose --profile tunnel up`.
+  # See docs/cloudflare-tunnel.md for the setup walkthrough.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [tunnel]
+    command: tunnel --no-autoupdate run
+    # CLOUDFLARE_TUNNEL_TOKEN is required at runtime when this service starts.
+    # (We don't use ${VAR:?...} here because that trips compose config parsing
+    # even when the profile is not active.)
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [plmmsa_net]
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    environment:
+      PLMMSA_SETTINGS_FILE: /app/settings.toml
+      CACHE_URL: redis://cache:6379
+      EMBEDDING_URL: http://embedding:8081
+      VDB_URL: http://vdb:8082
+      ALIGN_URL: http://align:8083
+      # Sequence-fetcher selection (plmmsa.worker.__main__._build_fetcher).
+      # Populate once per collection with:
+      #   python -m plmmsa.tools.build_sequence_cache --fasta <f> --redis-url <u>
+      PLMMSA_SEQUENCE_REDIS_URL: ${PLMMSA_SEQUENCE_REDIS_URL:-redis://cache:6379}
+      PLMMSA_SEQUENCE_KEY_FORMAT: ${PLMMSA_SEQUENCE_KEY_FORMAT:-seq:{id}}
+    volumes:
+      - ./settings.toml:/app/settings.toml:ro
+    depends_on:
+      cache:
+        condition: service_healthy
+    networks: [plmmsa_net]
+    restart: unless-stopped

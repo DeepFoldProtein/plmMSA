@@ -1,0 +1,117 @@
+# Copy to settings.toml and edit. Non-secret tunables only.
+# Secrets and host-specific paths belong in .env.
+#
+# This file is bind-mounted read-only into every service. After editing,
+# run `docker compose restart` so all services see the change. See
+# docs/maintenance.md for the operator runbook.
+
+[service]
+api_port = 8080
+embedding_port = 8081
+vdb_port = 8082
+align_port = 8083
+cache_port = 6379
+
+# Pairwise aligners hosted by the align service. PLMAlign is the embedding-
+# space SW/NW baseline (fast, CPU-only). OTalign is scaffold-only until its
+# implementation lands — leave enabled=false unless you know it's ready.
+[aligners.plmalign]
+display_name = "PLMAlign (embedding-SW/NW, affine gap)"
+enabled = true
+
+[aligners.otalign]
+display_name = "OTalign (not yet implemented)"
+enabled = false
+
+# PLM backends. device_env_var / checkpoint_env_var name the env vars to read
+# for device pinning and (optional) local checkpoint paths.
+[models.ankh_cl]
+display_name = "Ankh-CL (DeepFold contrastive fine-tune)"
+hf_tokenizer_id = "ElnaggarLab/ankh-large"
+max_length = 1022
+device_env_var = "ANKH_CL_DEVICE"
+checkpoint_env_var = "ANKH_CL_CHECKPOINT"
+enabled = true
+
+[models.ankh_large]
+display_name = "Ankh-Large"
+hf_tokenizer_id = "ElnaggarLab/ankh-large"
+max_length = 1022
+device_env_var = "ANKH_LARGE_DEVICE"
+enabled = true
+
+[models.esm1b]
+display_name = "ESM-1b"
+hf_tokenizer_id = "facebook/esm1b_t33_650M_UR50S"
+max_length = 1022
+device_env_var = "ESM1B_DEVICE"
+enabled = true
+
+[models.prott5]
+display_name = "ProtT5-XL-UniRef50"
+hf_tokenizer_id = "Rostlab/prot_t5_xl_uniref50"
+max_length = 1022
+device_env_var = "PROTTRANS_DEVICE"
+enabled = true
+
+# Vector-DB collections. Paths are relative to VDB_DATA_DIR (bind-mounted
+# read-only into the vdb service). `model_backend` names the PLM whose
+# mean-pooled embeddings populated this index.
+[vdb.collections.ankh_uniref50]
+display_name = "Ankh UniRef50"
+model_backend = "ankh_cl"
+dim = 1536
+index_path = "ankh_uniref50/add_datas/vdb/ankh_uniref50_vdb.faiss"
+id_mapping_path = "ankh_uniref50/add_datas/vdb/ankh_uniref50_vdb.faiss_id_mapping.pkl"
+nprobe = 100
+normalize = true
+enabled = true
+
+[vdb.collections.esm1b_uniref50]
+display_name = "ESM-1b UniRef50"
+model_backend = "esm1b"
+dim = 1280
+index_path = "esm1b_uniref50/add_datas/vdb/esm1b_uniref50_vdb.faiss"
+id_mapping_path = "esm1b_uniref50/add_datas/vdb/esm1b_uniref50_vdb.faiss_id_mapping.pkl"
+nprobe = 100
+normalize = true
+enabled = true
+
+# Input validation limits enforced at the API edge.
+[limits]
+max_residues_per_chain = 1022
+max_chains_paired = 16
+max_body_bytes = 10485760
+
+# Eviction limits for computed MSAs (result cache) and PLM embeddings.
+# These knobs are advisory today; enforcement lands with the result-cache
+# milestone (see PLAN.md).
+[cache]
+result_cache_max_size_gb = 100
+result_cache_max_age_days = 30
+embedding_cache_max_size_gb = 200
+embedding_cache_max_age_days = 90
+
+# Async job queue tuning.
+[queue]
+worker_concurrency = 4
+backpressure_threshold = 50
+max_queue_depth = 200
+
+# In-process rate limits. Cloudflare WAF is the first line externally.
+[ratelimit]
+per_ip_rpm = 30
+per_token_rpm = 120
+
+[cors]
+allow_origins = ["http://localhost:*", "https://colab.research.google.com"]
+allow_credentials = false
+
+[api]
+v1_sunset_date = "2026-12-31"
+openapi_public = true
+
+[logging]
+level = "INFO"
+json_format = true
+request_id_header = "X-Request-ID"
