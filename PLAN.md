@@ -128,18 +128,24 @@ ICN06, Seoul/Incheon).
 - [ ] Tunnel created in Zero Trust dashboard, `CLOUDFLARE_TUNNEL_TOKEN` in `.env`.
 - [ ] Public hostname points to `api:8080` (confirmed by checking
       `docker compose logs cloudflared` for the registered ingress rule).
-- [ ] `docker compose --profile tunnel up -d` and verify `curl https://plmmsa.deepfold.org/health`.
-- [ ] **Lock down `/admin/*`.** The tunnel forwards *every* path on the
-      hostname, so `/admin/tokens` is reachable (401-gated, but still a
-      surface). Either (a) add a path filter in the CF dashboard that 404s
-      `/admin/*`, or (b) gate with a Cloudflare Access policy, or (c) move
-      admin routes behind a separate internal-only FastAPI app that is
-      not in the tunnel ingress. Recommended: (a) for the quickest ship.
+- [x] `docker compose --profile tunnel up -d` + end-to-end T1120 MSA via
+      `https://plmmsa.deepfold.org/v2/msa` → 51-depth A3M,
+      `hits_fetched = hits_found = 50`.
+- [x] Every `/v2/*` and `/admin/*` route requires a bearer token. Only
+      `/health`, `/v2/version`, `/openapi.json`, `/docs`, `/redoc`,
+      and `/v1/*` (sunset) are anonymous.
+- [ ] **CF dashboard: add a `/admin/*` ingress rule returning 404** before
+      the `/` catch-all. Admin routes are bearer-gated but still
+      path-reachable through the tunnel; adding the dashboard rule
+      removes the surface entirely.
 - [ ] Institutional sign-off on public availability.
 
 ### 8. Regression
-- [ ] `bench/run_regression.py --api-url http://localhost:8080` against all CASP15 fixtures.
-- [ ] Depths within tolerance of the legacy baseline in `expected_stats.json`. If not, investigate before opening up the tunnel.
+- [x] `bench/run_regression.py --api-url http://localhost:8080 --k 500` —
+      3/3 CASP15 fixtures pass against rebased baselines.
+- [x] Depths within ±10% of the plmMSA `k=500` baseline in
+      `expected_stats.json` (legacy depths kept as `legacy_msa_depth`
+      for reference; not a like-for-like comparison).
 
 ## Deferred — pick up after the first real MSA ships
 
