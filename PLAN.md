@@ -73,9 +73,13 @@ Runbook for flipping the stack from "scaffolded" to "producing MSAs on UniRef50"
 - [ ] `.env` filled in: GPU device pins, `ADMIN_TOKEN` rotated away from default.
 
 ### 2. Model weight warmup
-- [ ] Ankh-CL checkpoint: `ANKH_CL_CHECKPOINT=DeepFoldProtein/Ankh-Large-Contrastive` (or a local path if offline). First `embedding` boot downloads it into `MODEL_CACHE_DIR`.
-- [ ] Ankh-Large, ESM-1b, ProtT5 — decide which to enable in `settings.toml` (`[models.*].enabled`). Disable the ones you don't want loaded at startup to cut boot time.
-- [ ] Bring `embedding` up and confirm `GET /health` lists the resident PLMs with their device pins.
+See [`docs/warming-weights.md`](./docs/warming-weights.md) for the
+concrete `hf download` commands.
+- [ ] Point `MODEL_CACHE_DIR` in `.env` at the host's shared HF cache tree
+      (e.g. `/store/deepfold/huggingface` on the deepfold host).
+- [ ] `export HF_HOME=$MODEL_CACHE_DIR` and `uv run hf download DeepFoldProtein/Ankh-Large-Contrastive` (plus any other PLMs to enable).
+- [ ] In `settings.toml`, set `[models.*].enabled` for only the PLMs you want resident at startup.
+- [ ] `docker compose up -d embedding` and confirm `GET /health` lists the resident PLMs with their device pins.
 
 ### 3. FAISS index
 - [ ] Pick the index size:

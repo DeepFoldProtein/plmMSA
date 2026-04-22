@@ -45,6 +45,11 @@ services:
     environment:
       PLMMSA_SETTINGS_FILE: /app/settings.toml
       MODEL_CACHE_DIR: /model_cache
+      # Point HuggingFace at the shared model cache so PLM weights persist on
+      # the host and are shareable across machines. Pre-warm with
+      #   HF_HOME=/path/to/host/model_cache huggingface-cli download <repo>
+      HF_HOME: /model_cache
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
       ANKH_CL_DEVICE: ${ANKH_CL_DEVICE:-cuda:0}
       ANKH_LARGE_DEVICE: ${ANKH_LARGE_DEVICE:-cuda:0}
       ESM1B_DEVICE: ${ESM1B_DEVICE:-cuda:1}
@@ -52,7 +57,10 @@ services:
       ANKH_CL_CHECKPOINT: ${ANKH_CL_CHECKPOINT:-}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
-      - ${MODEL_CACHE_DIR:-./model_cache}:/model_cache:ro
+      # Read-write: the embedding container writes first-download artifacts
+      # here if HF_HUB_OFFLINE=0. Flip to :ro after the cache is warm on a
+      # locked-down deployment.
+      - ${MODEL_CACHE_DIR:-./model_cache}:/model_cache
     depends_on:
       cache:
         condition: service_healthy

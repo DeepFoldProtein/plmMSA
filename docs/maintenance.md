@@ -142,15 +142,19 @@ runtime. `uv`'s layer-cached install keeps rebuilds fast as long as
 
 ## Populating model weights
 
-The `embedding` container downloads PLM checkpoints from HuggingFace on
-first use. `MODEL_CACHE_DIR` on the host is bind-mounted read-only — on
-first boot you can temporarily mount it read-write (or `docker compose run
---rm embedding python -c "import transformers; ..."`) to warm the cache.
+PLM checkpoints are warmed **on the host**, not inside the `embedding`
+container. The container mounts `MODEL_CACHE_DIR` read-only with
+`HF_HUB_OFFLINE=1` — it cannot download. See the step-by-step in
+[`docs/warming-weights.md`](./warming-weights.md).
 
-The Ankh-CL checkpoint is pointed at by `ANKH_CL_CHECKPOINT` — set this to
-either a local path under `MODEL_CACHE_DIR` or a HuggingFace repo id
-(`DeepFoldProtein/Ankh-Large-Contrastive`). Downloads land in the HF cache
-inside the container; re-mounting keeps them warm across restarts.
+Short version:
+
+```bash
+export HF_HOME="$(grep '^MODEL_CACHE_DIR=' .env | cut -d= -f2-)"
+uv run hf download DeepFoldProtein/Ankh-Large-Contrastive   # ankh_cl backend
+uv run hf download ElnaggarLab/ankh-large                   # shared tokenizer
+docker compose up -d embedding
+```
 
 ## Updating settings
 

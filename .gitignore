@@ -2,6 +2,7 @@
 .env
 .env.*.local
 settings.toml
+settings.toml.*
 
 # Internal design doc — kept out of the public repo.
 CLAUDE.md
