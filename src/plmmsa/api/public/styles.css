@@ -184,7 +184,153 @@ pre {
   margin: 0;
 }
 
-/* MSA viewer styles rolled back — raw A3M preview is the only view now. */
+.static-msa-viewer {
+  max-height: 24rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.static-msa-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  background: #f7f7f4;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.static-msa-table {
+  max-height: 21.3rem;
+  overflow: auto;
+}
+
+.msa-page-btn {
+  min-width: 2rem;
+  padding: 0.2rem 0.45rem;
+  color: var(--fg);
+  background: #fff;
+  border-color: var(--border);
+}
+
+.msa-page-btn:disabled {
+  color: #aaa;
+  background: #f5f3ed;
+}
+
+.msa-page-label {
+  min-width: 8.5rem;
+  color: var(--fg-muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.static-msa-row {
+  display: grid;
+  grid-template-columns: 12rem 1fr;
+  min-width: max-content;
+  border-bottom: 1px solid #eee;
+}
+
+.static-msa-query {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-bottom-color: var(--accent);
+  box-shadow: 0 1px 0 var(--accent);
+}
+
+.static-msa-query .static-msa-label,
+.static-msa-query .static-msa-seq {
+  background: #eef7fb;
+}
+
+.static-msa-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  overflow: hidden;
+  padding: 0.12rem 0.5rem;
+  border-right: 1px solid var(--border);
+  background: #f7f7f4;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.static-msa-seq {
+  padding: 0.12rem 0.5rem;
+  white-space: pre;
+}
+
+.msa-residue {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+}
+
+.msa-aa-acidic {
+  background: #e43d30;
+  color: #fff;
+}
+
+.msa-aa-basic {
+  background: #1f66d1;
+  color: #fff;
+}
+
+.msa-aa-polar {
+  background: #2da44e;
+  color: #fff;
+}
+
+.msa-aa-hydrophobic {
+  background: #f2d13d;
+  color: #222;
+}
+
+.msa-aa-aromatic {
+  background: #18a3a8;
+  color: #fff;
+}
+
+.msa-aa-cysteine {
+  background: #d29b00;
+  color: #222;
+}
+
+.msa-aa-glycine {
+  background: #e6e6e6;
+  color: #222;
+}
+
+.msa-aa-proline {
+  background: #c47bd6;
+  color: #fff;
+}
+
+.msa-aa-gap {
+  background: transparent;
+  color: #aaa;
+}
+
+.msa-aa-other {
+  background: #ecebe2;
+  color: var(--fg-muted);
+}
+
+.static-msa-note {
+  position: sticky;
+  left: 0;
+  padding: 0.35rem 0.5rem;
+  background: #f7f7f4;
+  color: var(--fg-muted);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
 
 details { margin-bottom: 0.75rem; }
 

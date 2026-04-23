@@ -74,8 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CASP15 targets. `gcc/g++/make` added to the align image (Inductor
   builds Triton kernels at runtime).
 - **Static submit-a-job web UI** at `/ui/`. Pure client — vanilla
-  HTML/CSS/JS, no build step. BioJS msa viewer via CDN with
-  graceful fallback. Query-param routing (`?job=<id>`,
+  HTML/CSS/JS, no build step. Built-in colored MSA table viewer.
+  Query-param routing (`?job=<id>`,
   `?seq=<seq>`), localStorage job cache, adaptive 5 s / 60 s poll.
   Click the sequence label to copy the full sequence; hover for
   native tooltip.

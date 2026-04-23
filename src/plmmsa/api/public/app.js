@@ -341,25 +341,10 @@ console.log("plmMSA UI: app.js loaded");
       const a3m = body.result?.payload || "";
       const preview = a3m.split("\n").slice(0, 80).join("\n");
 
-      if (a3m && window.msa) {
+      if (a3m) {
         const container = document.getElementById("msa-viewer-container");
-        // Clear previous render
-        container.innerHTML = ""; 
-        
-        // As per your original snippet: remove lowercase letters
-        const cleanFasta = a3m.replace(/[a-z]/g, '');
-        
-        try {
-          const seqs = window.msa.io.fasta.parse(cleanFasta);
-          const m = window.msa({
-            el: container,
-            seqs: seqs
-          });
-          m.render();
-        } catch (e) {
-          console.error("MSA Viewer failed to render:", e);
-          container.textContent = "Error loading MSA Viewer.";
-        }
+        const seqs = parseA3mForViewer(a3m);
+        renderMsaViewer(container, seqs);
       }
 
       resultA3m.textContent = preview || "(no A3M yet)";
@@ -375,11 +360,160 @@ console.log("plmMSA UI: app.js loaded");
     }
   }
 
-  
+  function parseA3mForViewer(text) {
+    const seqs = [];
+    let current = null;
+    for (const rawLine of String(text).split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith(">")) {
+        const label = line.slice(1).trim() || `seq_${seqs.length + 1}`;
+        current = {
+          id: label.split(/\s+/)[0] || `seq_${seqs.length + 1}`,
+          name: label,
+          seq: "",
+        };
+        seqs.push(current);
+      } else if (current) {
+        current.seq += line.replace(/[a-z.]/g, "");
+      }
+    }
+    return seqs;
+  }
 
-  /* MSA viewer rolled back — the raw A3M preview below handles
-   * the common case. Revisit with a standalone viewer later.
-   */
+  function renderMsaViewer(container, seqs) {
+    container.innerHTML = "";
+    if (seqs.length === 0) return;
+
+    const pageSize = 199;
+    let page = 0;
+    const query = seqs[0];
+    const hits = seqs.slice(1);
+    const pageCount = Math.max(1, Math.ceil(hits.length / pageSize));
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "static-msa-viewer";
+    const controls = document.createElement("div");
+    controls.className = "static-msa-controls";
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "msa-page-btn";
+    prevBtn.textContent = "<";
+    const pageLabel = document.createElement("span");
+    pageLabel.className = "msa-page-label";
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "msa-page-btn";
+    nextBtn.textContent = ">";
+    controls.appendChild(prevBtn);
+    controls.appendChild(pageLabel);
+    controls.appendChild(nextBtn);
+
+    const table = document.createElement("div");
+    table.className = "static-msa-table";
+    wrapper.appendChild(controls);
+    wrapper.appendChild(table);
+    container.appendChild(wrapper);
+
+    function drawPage() {
+      table.innerHTML = "";
+      renderMsaRow(table, query, "static-msa-query");
+      const start = page * pageSize;
+      const rows = hits.slice(start, start + pageSize);
+      for (const seq of rows) renderMsaRow(table, seq);
+
+      prevBtn.disabled = page === 0;
+      nextBtn.disabled = page >= pageCount - 1;
+      const firstHit = hits.length === 0 ? 0 : start + 1;
+      const lastHit = Math.min(start + rows.length, hits.length);
+      pageLabel.textContent =
+        hits.length === 0
+          ? "query only"
+          : `${firstHit}-${lastHit} of ${hits.length}`;
+    }
+
+    prevBtn.addEventListener("click", () => {
+      if (page > 0) {
+        page--;
+        drawPage();
+      }
+    });
+    nextBtn.addEventListener("click", () => {
+      if (page < pageCount - 1) {
+        page++;
+        drawPage();
+      }
+    });
+
+    drawPage();
+  }
+
+  function renderMsaRow(parent, seq, extraClass = "") {
+    const row = document.createElement("div");
+    row.className = "static-msa-row";
+    if (extraClass) row.classList.add(extraClass);
+
+    const label = document.createElement("span");
+    label.className = "static-msa-label";
+    label.textContent = seq.name || seq.id || "";
+    label.title = label.textContent;
+
+    const body = document.createElement("span");
+    body.className = "static-msa-seq";
+    renderColoredSequence(body, seq.seq || "");
+
+    row.appendChild(label);
+    row.appendChild(body);
+    parent.appendChild(row);
+  }
+
+  function renderColoredSequence(container, seq) {
+    const fragment = document.createDocumentFragment();
+    for (const residue of seq) {
+      const cell = document.createElement("span");
+      cell.className = `msa-residue msa-aa-${residueClass(residue)}`;
+      cell.textContent = residue;
+      fragment.appendChild(cell);
+    }
+    container.appendChild(fragment);
+  }
+
+  function residueClass(residue) {
+    switch (String(residue).toUpperCase()) {
+      case "A":
+      case "I":
+      case "L":
+      case "M":
+      case "F":
+      case "W":
+      case "V":
+        return "hydrophobic";
+      case "D":
+      case "E":
+        return "acidic";
+      case "K":
+      case "R":
+        return "basic";
+      case "H":
+      case "Y":
+        return "aromatic";
+      case "S":
+      case "T":
+      case "N":
+      case "Q":
+        return "polar";
+      case "C":
+        return "cysteine";
+      case "G":
+        return "glycine";
+      case "P":
+        return "proline";
+      case "-":
+        return "gap";
+      default:
+        return "other";
+    }
+  }
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) =>
