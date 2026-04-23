@@ -125,8 +125,8 @@ services:
       test: ["CMD", "curl", "-fsS", "http://localhost:8082/health"]
       interval: 10s
       timeout: 3s
-      retries: 12
-      start_period: 30s
+      retries: 60
+      start_period: 10m
     restart: unless-stopped
 
   align:

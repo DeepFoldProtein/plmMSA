@@ -357,6 +357,12 @@ class Orchestrator:
                 target_seqs,
                 ids=kept_ids,
             )
+            target_embs = _fit_embeddings_to_sequences(
+                target_embs,
+                target_seqs,
+                model=model,
+                context="per_model",
+            )
             alignments = await self._align(
                 http,
                 aligner,
@@ -619,6 +625,12 @@ class Orchestrator:
                 score_model,
                 target_seqs,
                 ids=kept_ids,
+            )
+            score_target_embs = _fit_embeddings_to_sequences(
+                score_target_embs,
+                target_seqs,
+                model=score_model,
+                context="cross_plm",
             )
 
             # Phase 5 — one alignment call. Prepend the query embedding
@@ -1049,6 +1061,46 @@ def _alignment_score(alignments: list[dict[str, Any]]) -> float:
     if not alignments:
         return 0.0
     return float(alignments[0].get("score", 0.0))
+
+
+def _fit_embeddings_to_sequences(
+    embeddings: list[np.ndarray],
+    seqs: list[str],
+    *,
+    model: str,
+    context: str,
+) -> list[np.ndarray]:
+    """Trim extra per-residue rows so aligner indices fit sequence rows.
+
+    Some precomputed shard stores include special-token rows while the
+    sequence cache stores only amino-acid residues. Rendering is sequence-
+    indexed, so keep the residue-length prefix and let genuinely short
+    embeddings fail loudly in the bounds filter.
+    """
+    out: list[np.ndarray] = []
+    trimmed = 0
+    short = 0
+    for emb, seq in zip(embeddings, seqs, strict=True):
+        seq_len = len(seq)
+        emb_len = int(emb.shape[0])
+        if emb_len > seq_len:
+            out.append(emb[:seq_len])
+            trimmed += 1
+        else:
+            out.append(emb)
+            if emb_len < seq_len:
+                short += 1
+    if trimmed or short:
+        logger.warning(
+            "orchestrator: %s adjusted target embedding lengths for model=%s "
+            "(trimmed=%d short=%d total=%d)",
+            context,
+            model,
+            trimmed,
+            short,
+            len(seqs),
+        )
+    return out
 
 
 @dataclass(slots=True)

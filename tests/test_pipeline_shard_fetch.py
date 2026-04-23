@@ -103,6 +103,86 @@ def _handler(calls: list[dict[str, Any]]):
     return handler
 
 
+def _handler_with_extra_shard_row(calls: list[dict[str, Any]]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        body = json.loads(request.content.decode("utf-8")) if request.content else {}
+        calls.append({"path": path, "body": body})
+
+        if path == "/embed":
+            return httpx.Response(
+                200,
+                json={
+                    "model": body["model"],
+                    "dim": 2,
+                    "embeddings": [[[7.0, 7.0] for _ in range(len(s))] for s in body["sequences"]],
+                },
+            )
+        if path == "/search":
+            return httpx.Response(
+                200,
+                json={
+                    "collection": body["collection"],
+                    "k": body["k"],
+                    "results": [[{"id": "T1", "distance": 0.1}]],
+                },
+            )
+        if path == "/embed_by_id/bin":
+            import numpy as np
+
+            from plmmsa.align import binary as _binary
+
+            metadata = {
+                "model": body["model"],
+                "dim": 2,
+                "found_ids": ["T1"],
+                "missing": [],
+            }
+            # T1's sequence is length 2, but the shard has an extra row
+            # like a special token. The orchestrator should trim it before
+            # /align so downstream columns stay in sequence bounds.
+            frame = _binary.encode_tensors(
+                metadata,
+                [np.asarray([[1.0, 0.0], [2.0, 0.0], [99.0, 0.0]], dtype=np.float32)],
+            )
+            return httpx.Response(
+                200,
+                content=frame,
+                headers={"Content-Type": _binary.CONTENT_TYPE_EMBED},
+            )
+        if path == "/align":
+            return httpx.Response(
+                200,
+                json={
+                    "aligner": body["aligner"],
+                    "mode": body["mode"],
+                    "alignments": [
+                        {
+                            "score": 10.0,
+                            "mode": "local",
+                            "query_start": 0,
+                            "query_end": 2,
+                            "target_start": 0,
+                            "target_end": 2,
+                            "columns": [[0, 0], [1, 1]],
+                        },
+                        {
+                            "score": 5.0,
+                            "mode": "local",
+                            "query_start": 0,
+                            "query_end": 2,
+                            "target_start": 0,
+                            "target_end": 2,
+                            "columns": [[0, 0], [1, 1]],
+                        },
+                    ],
+                },
+            )
+        return httpx.Response(404, json={"code": "unexpected", "message": path})
+
+    return handler
+
+
 def _orch(shard_models: frozenset[str], calls: list[dict[str, Any]]) -> Orchestrator:
     transport = httpx.MockTransport(_handler(calls))
     return Orchestrator(
@@ -116,6 +196,29 @@ def _orch(shard_models: frozenset[str], calls: list[dict[str, Any]]) -> Orchestr
         DictTargetFetcher({"T1": "MK", "T2": "MK", "T3": "MK"}),
         client_factory=lambda: httpx.AsyncClient(transport=transport, base_url="http://stub"),
     )
+
+
+async def test_shard_embeddings_with_extra_rows_are_trimmed_before_align() -> None:
+    calls: list[dict[str, Any]] = []
+    transport = httpx.MockTransport(_handler_with_extra_shard_row(calls))
+    orch = Orchestrator(
+        OrchestratorConfig(
+            embedding_url="http://embedding",
+            vdb_url="http://vdb",
+            align_url="http://align",
+            align_transport="json",
+            shard_models=frozenset({"prott5"}),
+        ),
+        DictTargetFetcher({"T1": "MK"}),
+        client_factory=lambda: httpx.AsyncClient(transport=transport, base_url="http://stub"),
+    )
+
+    result = await orch.run({"sequences": ["MK"], "models": ["prott5"], "k": 1})
+
+    assert result.stats["hits_pre_filter"] == 1
+    assert result.stats["hits_fetched"] == 1
+    align_call = next(c for c in calls if c["path"] == "/align")
+    assert len(align_call["body"]["target_embeddings"][1]) == 2
 
 
 async def test_shard_first_then_embed_for_misses() -> None:
