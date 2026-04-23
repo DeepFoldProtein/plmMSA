@@ -66,20 +66,29 @@ def _make_router(
             )
         if path == "/align":
             # The align service doesn't know which model produced the
-            # embeddings; we decide by looking at the first target-embedding
-            # value (set as a sentinel by the test below).
-            sentinel = body["target_embeddings"][0][0][0]
+            # embeddings; target_embeddings[0] is the query self-score
+            # request, so use the first real target as the sentinel.
+            sentinel = body["target_embeddings"][1][0][0]
             match = next(
                 (m for m, spec in per_model.items() if spec["sentinel"] == sentinel),
                 None,
             )
             assert match is not None, f"unknown sentinel {sentinel}"
+            self_alignment = {
+                "score": 9.0,
+                "mode": "local",
+                "query_start": 0,
+                "query_end": 1,
+                "target_start": 0,
+                "target_end": 1,
+                "columns": [[0, 0]],
+            }
             return httpx.Response(
                 200,
                 json={
                     "aligner": body["aligner"],
                     "mode": body["mode"],
-                    "alignments": per_model[match]["alignments"],
+                    "alignments": [self_alignment, *per_model[match]["alignments"]],
                 },
             )
         return httpx.Response(404, json={"code": "unexpected", "message": path})

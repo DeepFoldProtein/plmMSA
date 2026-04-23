@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import gc
 import logging
+import os
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -16,6 +18,24 @@ from plmmsa.config import get_settings
 from plmmsa.errors import ErrorCode, PlmMSAError
 
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_cuda(reason: str) -> None:
+    """Best-effort CUDA allocator cleanup; never mask the original failure."""
+    gc.collect()
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            logger.debug("align: torch.cuda.ipc_collect() failed", exc_info=True)
+        logger.info("align: CUDA cache cleanup complete (%s)", reason)
+    except Exception:
+        logger.exception("align: CUDA cache cleanup failed (%s)", reason)
 
 
 class AlignRequest(BaseModel):
@@ -153,6 +173,13 @@ def create_app(*, aligners_override: dict[str, Aligner] | None = None) -> FastAP
     Tests pass `aligners_override` to inject stub aligners.
     """
     settings = get_settings()
+    empty_cache_after = os.environ.get("PLMMSA_ALIGN_CUDA_EMPTY_CACHE_AFTER_REQUEST", "")
+    empty_cache_after_request = empty_cache_after.lower() in {"1", "true", "yes", "on"}
+    if empty_cache_after_request:
+        logger.info(
+            "align: CUDA cache cleanup after every /align request is ENABLED "
+            "(PLMMSA_ALIGN_CUDA_EMPTY_CACHE_AFTER_REQUEST)"
+        )
     _maybe_register_gpu_builders(settings)
     app = FastAPI(
         title="plmMSA-align",
@@ -176,6 +203,19 @@ def create_app(*, aligners_override: dict[str, Aligner] | None = None) -> FastAP
             status_code=exc.http_status,
             content=exc.as_response().model_dump(mode="json"),
         )
+
+    @app.middleware("http")
+    async def _cuda_cleanup_middleware(request: Request, call_next: Any) -> Response:
+        gpu_endpoint = request.url.path.startswith("/align")
+        try:
+            response = await call_next(request)
+        except Exception:
+            if gpu_endpoint:
+                _cleanup_cuda(f"{request.url.path}:exception")
+            raise
+        if gpu_endpoint and (empty_cache_after_request or response.status_code >= 500):
+            _cleanup_cuda(f"{request.url.path}:status={response.status_code}")
+        return response
 
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     async def health() -> HealthResponse:

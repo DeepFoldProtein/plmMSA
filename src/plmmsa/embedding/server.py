@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import logging
 import os
@@ -21,6 +22,24 @@ from plmmsa.plm.base import PLM
 from plmmsa.plm.registry import load_enabled_backends
 
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_cuda(reason: str) -> None:
+    """Best-effort CUDA allocator cleanup; never mask the original failure."""
+    gc.collect()
+    try:
+        import torch as _torch  # heavy import; lazy
+
+        if not _torch.cuda.is_available():
+            return
+        _torch.cuda.empty_cache()
+        try:
+            _torch.cuda.ipc_collect()
+        except Exception:
+            logger.debug("embedding: torch.cuda.ipc_collect() failed", exc_info=True)
+        logger.info("embedding: CUDA cache cleanup complete (%s)", reason)
+    except Exception:
+        logger.exception("embedding: CUDA cache cleanup failed (%s)", reason)
 
 
 class EmbedRequest(BaseModel):
@@ -171,6 +190,19 @@ def create_app(
             content=exc.as_response().model_dump(mode="json"),
         )
 
+    @app.middleware("http")
+    async def _cuda_cleanup_middleware(request: Request, call_next: Any) -> Response:
+        gpu_endpoint = request.url.path.startswith("/embed")
+        try:
+            response = await call_next(request)
+        except Exception:
+            if gpu_endpoint:
+                _cleanup_cuda(f"{request.url.path}:exception")
+            raise
+        if gpu_endpoint and (empty_cache_after or response.status_code >= 500):
+            _cleanup_cuda(f"{request.url.path}:status={response.status_code}")
+        return response
+
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     async def health() -> HealthResponse:
         models = {
@@ -239,15 +271,6 @@ def create_app(
                         ex=cache_ttl_s,
                     )
                 await pipe.execute()
-
-            if empty_cache_after:
-                try:
-                    import torch as _torch
-
-                    if _torch.cuda.is_available():
-                        _torch.cuda.empty_cache()
-                except Exception:
-                    logger.exception("empty_cache failed")
 
         if any(a is None for a in resolved):
             raise PlmMSAError(

@@ -9,9 +9,8 @@ End-to-end flow for one (query, target) pair:
      information (PMI), and per-residue gap-cost multipliers from `f, g`
      + marginal mass of `P`.
   4. Run an affine-gap DP with per-residue gap costs (see `otalign_dp`).
-  5. Report `Alignment` with `score = sum(P[qi, ti] for matched pairs)`
-     — per the operator's definition ("sum of matched position of the
-     result plan matrix"), *not* the DP's own PMI objective.
+  5. Report `Alignment` with `score = dp.path_score / min(len(query), len(target))`
+     so OTalign hit scores are length-normalized DP objectives.
 
 This is an embedding-level aligner — OT needs both residue sets directly,
 can't operate on a precomputed similarity matrix, so `OTalign` inherits
@@ -169,7 +168,7 @@ def _align_pair(q, t, hp: _Hyperparams) -> Alignment:
     is inherently sequential.
     """
     len_q = q.shape[-2]
-    len_t = q.shape[-2]
+    len_t = t.shape[-2]
 
     # Step 1 — cost matrix, bounded [0, 2]. Done in the native backend of
     # the inputs so we don't leave the GPU until the DP step below.
@@ -206,20 +205,13 @@ def _align_pair(q, t, hp: _Hyperparams) -> Alignment:
         mode=hp.dp_mode,
     )
 
-    # Step 5 — headline score = sum of transport-plan mass at matched
-    # cells. The DP's own PMI sum is stored as a diagnostic if callers
-    # want it (accessible via DPResult but we don't surface it here to
-    # keep the Alignment contract stable).
-    matched = [(qi, ti) for qi, ti in dp.columns if qi >= 0 and ti >= 0]
-    if matched:
-        rows = np.asarray([qi for qi, _ in matched], dtype=np.int64)
-        cols = np.asarray([ti for _, ti in matched], dtype=np.int64)
-        plan_sum = float(P[rows, cols].sum()) / min(len_q, len_t)
-    else:
-        plan_sum = 0.0
+    # Step 5 — headline score = normalized DP objective. The path score
+    # is the affine-gap DP's sum of PMI match scores minus gap costs.
+    normalizer = max(1, min(len_q, len_t))
+    score = float(dp.path_score) / float(normalizer)
 
     return Alignment(
-        score=plan_sum,
+        score=score,
         mode=_aligner_mode(hp.dp_mode),
         query_start=dp.q_start,
         query_end=dp.q_end,

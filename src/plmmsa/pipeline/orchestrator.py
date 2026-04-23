@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -258,12 +257,13 @@ class Orchestrator:
 
         # Rank by score descending so the A3M reads "most confident first".
         merged_hits = sorted(merged.values(), key=lambda h: h.score, reverse=True)
+        query_self_score = max((r.query_self_score for r in per_model), default=0.0)
 
         if not merged_hits:
             return _query_only_result(
                 query_id=query_id,
                 query_seq=query_seq,
-                query_self_score=float(len(query_seq)),
+                query_self_score=query_self_score,
                 hits_found=sum(r.hits_found for r in per_model),
                 hits_fetched=0,
                 models=models,
@@ -280,7 +280,6 @@ class Orchestrator:
         if filter_applied:
             merged_hits = [h for h in merged_hits if h.score >= filter_threshold]
 
-        query_self_score = float(len(query_seq))
         a3m = assemble_a3m(
             query_id=query_id,
             query_seq=query_seq,
@@ -336,11 +335,20 @@ class Orchestrator:
             target_seqs = [fetched[i] for i in kept_ids]
 
             if not kept_ids:
+                self_alignment = await self._align(
+                    http,
+                    aligner,
+                    mode,
+                    query_emb,
+                    [query_emb],
+                    options,
+                )
                 return _PerModelResult(
                     model=model,
                     collection=collection,
                     hits_found=len(neighbors),
                     hits=[],
+                    query_self_score=_alignment_score(self_alignment),
                 )
 
             target_embs = await self._embed_targets(
@@ -349,7 +357,16 @@ class Orchestrator:
                 target_seqs,
                 ids=kept_ids,
             )
-            alignments = await self._align(http, aligner, mode, query_emb, target_embs, options)
+            alignments = await self._align(
+                http,
+                aligner,
+                mode,
+                query_emb,
+                [query_emb, *target_embs],
+                options,
+            )
+            query_self_score = _alignment_score(alignments[:1])
+            alignments = alignments[1:]
         except Exception as exc:
             # A single model's failure should not nuke the whole request when
             # we're running multiple — record the error and let the union
@@ -360,6 +377,7 @@ class Orchestrator:
                 collection=collection,
                 hits_found=0,
                 hits=[],
+                query_self_score=0.0,
                 error=str(exc)[:200],
             )
 
@@ -394,6 +412,7 @@ class Orchestrator:
             collection=collection,
             hits_found=len(neighbors),
             hits=hits,
+            query_self_score=query_self_score,
         )
 
     async def _run_cross_plm(
@@ -429,7 +448,7 @@ class Orchestrator:
             return _query_only_result(
                 query_id=query_id,
                 query_seq=query_seq,
-                query_self_score=float(len(query_seq)),
+                query_self_score=result.query_self_score,
                 hits_found=result.hits_found,
                 hits_fetched=0,
                 models=retrieval_models,
@@ -438,7 +457,7 @@ class Orchestrator:
         a3m = assemble_a3m(
             query_id=query_id,
             query_seq=query_seq,
-            query_self_score=float(len(query_seq)),
+            query_self_score=result.query_self_score,
             hits=result.hits,
         )
         return JobResult(
@@ -457,6 +476,7 @@ class Orchestrator:
                 "filter_threshold": result.filter_threshold,
                 "retrieval_models": retrieval_models,
                 "score_model": score_model,
+                "query_self_score": result.query_self_score,
                 "aligner": aligner,
                 "mode": mode,
                 "per_retrieval": result.per_retrieval_stats,
@@ -540,9 +560,14 @@ class Orchestrator:
                         best_distance[tid] = dist
 
             if not order:
-                score_query_task.cancel()
-                with contextlib.suppress(BaseException):
-                    await score_query_task
+                score_query_emb = await score_query_task
+                query_self_score = await self._score_self_embedding(
+                    http,
+                    aligner,
+                    mode,
+                    score_query_emb,
+                    options,
+                )
                 return _CrossPlmChainResult(
                     hits=[],
                     hits_found=0,
@@ -551,6 +576,7 @@ class Orchestrator:
                     filter_applied=False,
                     filter_threshold=_score_threshold(len(query_seq)),
                     per_retrieval_stats=per_retrieval_stats,
+                    query_self_score=query_self_score,
                 )
 
             # Phase 3 — fetch target sequences. Fetcher key format is
@@ -565,9 +591,14 @@ class Orchestrator:
             target_seqs = [fetched[tid] for tid in kept_ids]
 
             if not kept_ids:
-                score_query_task.cancel()
-                with contextlib.suppress(BaseException):
-                    await score_query_task
+                score_query_emb = await score_query_task
+                query_self_score = await self._score_self_embedding(
+                    http,
+                    aligner,
+                    mode,
+                    score_query_emb,
+                    options,
+                )
                 return _CrossPlmChainResult(
                     hits=[],
                     hits_found=len(order),
@@ -576,6 +607,7 @@ class Orchestrator:
                     filter_applied=False,
                     filter_threshold=_score_threshold(len(query_seq)),
                     per_retrieval_stats=per_retrieval_stats,
+                    query_self_score=query_self_score,
                 )
 
             # Phase 4 — score-model embed pass. Query embed was kicked
@@ -589,10 +621,19 @@ class Orchestrator:
                 ids=kept_ids,
             )
 
-            # Phase 5 — one alignment call.
+            # Phase 5 — one alignment call. Prepend the query embedding
+            # itself so the query header score is evaluated by the same
+            # aligner/scoring path as all hits without an extra round-trip.
             alignments = await self._align(
-                http, aligner, mode, score_query_emb, score_target_embs, options
+                http,
+                aligner,
+                mode,
+                score_query_emb,
+                [score_query_emb, *score_target_embs],
+                options,
             )
+            query_self_score = _alignment_score(alignments[:1])
+            alignments = alignments[1:]
 
         hits: list[AlignmentHit] = []
         dropped_oob = 0
@@ -636,6 +677,7 @@ class Orchestrator:
             filter_applied=filter_applied,
             filter_threshold=filter_threshold,
             per_retrieval_stats=per_retrieval_stats,
+            query_self_score=query_self_score,
         )
 
     async def _run_paired(
@@ -711,6 +753,7 @@ class Orchestrator:
             query_ids=query_ids,
             query_seqs=query_seqs,
             paired_rows=rows,
+            query_self_score=sum(cr.query_self_score for cr in chain_results),
         )
 
         per_chain_stats: list[dict[str, Any]] = []
@@ -724,6 +767,7 @@ class Orchestrator:
                     "hits_post_filter": len(cr.hits),
                     "filter_applied": cr.filter_applied,
                     "filter_threshold": cr.filter_threshold,
+                    "query_self_score": cr.query_self_score,
                     "per_retrieval": cr.per_retrieval_stats,
                     "tax_resolved": join.per_chain_with_tax[i],
                     "taxonomies": join.taxonomies_per_chain[i],
@@ -759,6 +803,19 @@ class Orchestrator:
                 f"embedding length {emb[0].shape[0]} does not match query length {len(seq)}"
             )
         return emb[0]
+
+    async def _score_self_embedding(
+        self,
+        http: httpx.AsyncClient,
+        aligner: str,
+        mode: str,
+        query_emb: np.ndarray,
+        options: dict[str, Any],
+    ) -> float:
+        alignments = await self._align(http, aligner, mode, query_emb, [query_emb], options)
+        if not alignments:
+            return 0.0
+        return float(alignments[0].get("score", 0.0))
 
     async def _embed_targets(
         self,
@@ -985,6 +1042,13 @@ class _CrossPlmChainResult:
     filter_applied: bool
     filter_threshold: float
     per_retrieval_stats: dict[str, dict[str, Any]]
+    query_self_score: float
+
+
+def _alignment_score(alignments: list[dict[str, Any]]) -> float:
+    if not alignments:
+        return 0.0
+    return float(alignments[0].get("score", 0.0))
 
 
 @dataclass(slots=True)
@@ -999,6 +1063,7 @@ class _PerModelResult:
     collection: str
     hits_found: int
     hits: list[AlignmentHit]
+    query_self_score: float
     error: str | None = None
 
     def stats(self) -> dict[str, Any]:

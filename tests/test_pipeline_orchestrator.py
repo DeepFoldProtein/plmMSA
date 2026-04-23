@@ -80,6 +80,15 @@ async def test_orchestrator_happy_path_builds_a3m() -> None:
         target_embs=[[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 0.5]]],
         alignments=[
             {
+                "score": 3.0,
+                "mode": "local",
+                "query_start": 0,
+                "query_end": 3,
+                "target_start": 0,
+                "target_end": 3,
+                "columns": [[0, 0], [1, 1], [2, 2]],
+            },
+            {
                 "score": 2.5,
                 "mode": "local",
                 "query_start": 0,
@@ -114,7 +123,17 @@ async def test_orchestrator_falls_back_to_query_only_when_no_targets() -> None:
         query_emb=[[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
         neighbors=[{"id": "UNKNOWN", "distance": 0.1}],
         target_embs=[],
-        alignments=[],
+        alignments=[
+            {
+                "score": 3.0,
+                "mode": "local",
+                "query_start": 0,
+                "query_end": 3,
+                "target_start": 0,
+                "target_end": 3,
+                "columns": [[0, 0], [1, 1], [2, 2]],
+            }
+        ],
     )
     fetcher = DictTargetFetcher({})
     orchestrator = _make_orchestrator(transport, fetcher)

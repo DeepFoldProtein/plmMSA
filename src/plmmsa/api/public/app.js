@@ -24,6 +24,10 @@ console.log("plmMSA UI: app.js loaded");
     plmalign: ["local", "global"],
     otalign: ["local", "global", "glocal", "q2t", "t2q"],
   };
+  const DEFAULT_MODE = {
+    plmalign: "global",
+    otalign: "glocal",
+  };
 
   /* --- localStorage-backed job cache --- */
 
@@ -103,7 +107,7 @@ console.log("plmMSA UI: app.js loaded");
 
   /* --- Mode picker auto-hide --- */
 
-  function refreshModeOptions() {
+  function refreshModeOptions({ applyDefault = false } = {}) {
     const aligner = alignerSel.value;
     const allowed = new Set(ALIGNER_MODES[aligner] || ["local", "global"]);
     for (const opt of modeSel.options) {
@@ -111,8 +115,10 @@ console.log("plmMSA UI: app.js loaded");
       opt.hidden = !!only && only !== aligner;
       opt.disabled = opt.hidden;
     }
-    if (modeSel.options[modeSel.selectedIndex]?.disabled) {
-      modeSel.value = "local";
+    if (applyDefault) {
+      modeSel.value = DEFAULT_MODE[aligner] || "global";
+    } else if (!allowed.has(modeSel.value) || modeSel.options[modeSel.selectedIndex]?.disabled) {
+      modeSel.value = DEFAULT_MODE[aligner] || "global";
     }
   }
 
@@ -440,8 +446,8 @@ console.log("plmMSA UI: app.js loaded");
       selectJob(q.job);
     }
 
-    refreshModeOptions();
-    alignerSel.addEventListener("change", refreshModeOptions);
+    refreshModeOptions({ applyDefault: true });
+    alignerSel.addEventListener("change", () => refreshModeOptions({ applyDefault: true }));
     form.addEventListener("submit", onSubmit);
     clearBtn.addEventListener("click", clearCache);
     copyBtn.addEventListener("click", () => {

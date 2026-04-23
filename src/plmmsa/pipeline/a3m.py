@@ -80,6 +80,7 @@ def assemble_paired_a3m(
     query_ids: Sequence[str],
     query_seqs: Sequence[str],
     paired_rows: Sequence[tuple[str, Sequence[AlignmentHit], float]],
+    query_self_score: float | None = None,
 ) -> str:
     """Assemble a paired A3M from per-chain queries + ranked paired rows.
 
@@ -104,8 +105,13 @@ def assemble_paired_a3m(
     lines: list[str] = []
     # Query row — id is `|`-joined so clients can recover per-chain ids.
     joined_query_id = "|".join(query_ids)
-    # Self-score convention matches the unpaired A3M: sum of chain lengths.
-    self_score = float(sum(len(s) for s in query_seqs))
+    # Defaults to the legacy sum-of-lengths convention for direct callers;
+    # orchestrator jobs pass aligner-evaluated self scores.
+    self_score = (
+        float(sum(len(s) for s in query_seqs))
+        if query_self_score is None
+        else float(query_self_score)
+    )
     lines.append(f">{joined_query_id}   {self_score:.3f}")
     lines.append(sep.join(query_seqs))
 

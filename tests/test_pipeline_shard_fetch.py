@@ -128,7 +128,7 @@ async def test_shard_first_then_embed_for_misses() -> None:
     #   /search,
     #   /embed_by_id/bin (T1, T2, T3 — binary response),
     #   /embed (miss fallback: T2 only),
-    #   /align (3 targets in kept_ids order)
+    #   /align (query self target + 3 hits in kept_ids order)
     paths = [c["path"] for c in calls]
     assert paths == ["/embed", "/search", "/embed_by_id/bin", "/embed", "/align"]
 
@@ -136,15 +136,17 @@ async def test_shard_first_then_embed_for_misses() -> None:
     miss_call = calls[3]
     assert miss_call["body"]["sequences"] == ["MK"]  # T2's sequence
 
-    # Align should receive 3 target embeddings in kept_ids order (T1, T2, T3).
+    # Align should receive the query embedding first for self-score, then
+    # 3 target embeddings in kept_ids order (T1, T2, T3).
     align_call = calls[4]
-    assert len(align_call["body"]["target_embeddings"]) == 3
+    assert len(align_call["body"]["target_embeddings"]) == 4
+    assert align_call["body"]["target_embeddings"][0][0][0] == 7.0
     # T1 from shard = [[1.0, 0.0]]
-    assert align_call["body"]["target_embeddings"][0][0][0] == 1.0
+    assert align_call["body"]["target_embeddings"][1][0][0] == 1.0
     # T2 from /embed fallback = [[7.0, 7.0]]
-    assert align_call["body"]["target_embeddings"][1][0][0] == 7.0
+    assert align_call["body"]["target_embeddings"][2][0][0] == 7.0
     # T3 from shard = [[3.0, 0.0]]
-    assert align_call["body"]["target_embeddings"][2][0][0] == 3.0
+    assert align_call["body"]["target_embeddings"][3][0][0] == 3.0
 
     # Final A3M should still have 3 hits.
     assert result.stats["hits_fetched"] == 3

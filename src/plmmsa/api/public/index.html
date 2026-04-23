@@ -40,11 +40,11 @@
           <label>
             <span>Mode</span>
             <select id="mode" name="mode">
-              <option value="local" selected>local</option>
-              <option value="global">global</option>
-              <option value="glocal" data-only="otalign">glocal (OTalign)</option>
-              <option value="q2t" data-only="otalign">q2t (OTalign)</option>
-              <option value="t2q" data-only="otalign">t2q (OTalign)</option>
+              <option value="local">local</option>
+              <option value="global" selected>global</option>
+              <option value="glocal" data-only="otalign">glocal</option>
+              <option value="q2t" data-only="otalign">q2t</option>
+              <option value="t2q" data-only="otalign">t2q</option>
             </select>
           </label>
           <label>
@@ -55,7 +55,7 @@
         <div class="row">
           <label class="inline">
             <input id="filter_by_score" name="filter_by_score" type="checkbox" checked>
-            <span>Algorithm 1 step 5 filter (min(0.2·L, 8.0))</span>
+            <span>Apply post-filter</span>
           </label>
           <button type="submit" id="submit-btn">Submit</button>
         </div>
