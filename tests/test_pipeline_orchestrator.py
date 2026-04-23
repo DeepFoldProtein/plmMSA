@@ -61,6 +61,7 @@ def _make_orchestrator(transport: httpx.MockTransport, fetcher) -> Orchestrator:
         embedding_url="http://embedding",
         vdb_url="http://vdb",
         align_url="http://align",
+            align_transport="json",
     )
 
     def client_factory() -> httpx.AsyncClient:
@@ -96,7 +97,10 @@ async def test_orchestrator_happy_path_builds_a3m() -> None:
 
     assert result.format == "a3m"
     lines = result.payload.rstrip("\n").splitlines()
-    assert lines[0].startswith(">query")
+    # Default query_id is now "101" (numeric label, chain index + 101).
+    # Previously defaulted to "query"; orchestrator still accepts an
+    # explicit `query_id=` request field.
+    assert lines[0].startswith(">101")
     assert lines[1] == "MKT"
     assert lines[2] == ">T1   2.500"
     assert lines[3] == "MKTa"
@@ -118,7 +122,7 @@ async def test_orchestrator_falls_back_to_query_only_when_no_targets() -> None:
     result = await orchestrator.run({"sequences": ["MKT"]})
 
     assert result.format == "a3m"
-    assert result.payload == ">query   3.000\nMKT\n"
+    assert result.payload == ">101   3.000\nMKT\n"
     assert result.stats["hits_found"] == 1
     assert result.stats["hits_fetched"] == 0
     assert "note" in result.stats

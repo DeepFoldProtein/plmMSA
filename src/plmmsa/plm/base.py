@@ -6,6 +6,30 @@ from collections.abc import Sequence
 import torch
 
 
+def dtype_from_precision(precision: str) -> torch.dtype:
+    """Map the settings string to a torch dtype.
+
+    Central so every PLM loader resolves precision the same way, and so
+    `settings.toml` has a single documented set of accepted values.
+    """
+    key = precision.lower().strip()
+    mapping: dict[str, torch.dtype] = {
+        "fp32": torch.float32,
+        "float32": torch.float32,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "half": torch.float16,
+    }
+    if key not in mapping:
+        raise ValueError(
+            f"unsupported precision {precision!r}; "
+            f"expected one of {sorted(mapping)}"
+        )
+    return mapping[key]
+
+
 class PLM(ABC):
     """Per-residue protein language model embedding backend.
 

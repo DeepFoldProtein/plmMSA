@@ -111,11 +111,37 @@ async def _main() -> None:
     redis = Redis.from_url(cache_url, decode_responses=False)
     store = JobStore(redis)
 
+    from plmmsa.config import get_settings
+
+    settings = get_settings()
+    # Comma-separated list of PLM ids whose target embeddings should be
+    # looked up in the shard store first via /embed_by_id. Empty → keep
+    # today's behavior (always /embed).
+    shard_models_env = os.environ.get("PLMMSA_SHARD_MODELS", "")
+    shard_models = frozenset(
+        m.strip() for m in shard_models_env.split(",") if m.strip()
+    )
+    if shard_models:
+        logger.info("worker: shard-first target fetch enabled for %s", sorted(shard_models))
+    # Collect the set of aligners whose post-score filter is enabled
+    # in settings. OTalign defaults off because its score scale doesn't
+    # match the upstream (0.2*L, 8.0) calibration.
+    filter_enabled_aligners = frozenset(
+        aid for aid in ("plmalign", "plm_blast", "otalign")
+        if getattr(getattr(settings.aligners, aid, None), "filter_enabled", False)
+    )
     orchestrator = Orchestrator(
         config=OrchestratorConfig(
             embedding_url=os.environ.get("EMBEDDING_URL", "http://embedding:8081"),
             vdb_url=os.environ.get("VDB_URL", "http://vdb:8082"),
             align_url=os.environ.get("ALIGN_URL", "http://align:8083"),
+            default_k=settings.queue.default_k,
+            embed_chunk_size=settings.queue.embed_chunk_size,
+            shard_models=shard_models,
+            filter_enabled_aligners=filter_enabled_aligners,
+            # score_model is resolved at the API edge per-aligner and
+            # stamped into the job payload. cfg.score_model stays empty as
+            # a no-op safety belt for non-API callers (bench scripts).
         ),
         fetcher=_build_fetcher(),
     )

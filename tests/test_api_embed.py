@@ -27,7 +27,12 @@ class _StubAsyncClient:
     async def __aexit__(self, *args) -> None:
         return None
 
-    async def post(self, url: str, json: dict | None = None) -> _StubResponse:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        headers: dict | None = None,
+    ) -> _StubResponse:
         assert url.endswith("/embed"), f"unexpected upstream url: {url}"
         assert json is not None
         assert "model" in json and "sequences" in json

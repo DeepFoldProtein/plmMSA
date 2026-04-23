@@ -21,9 +21,9 @@ cp settings.example.toml settings.toml
 ./bin/up.sh
 ```
 
-## CI expectations
+## Pre-merge checks
 
-The following must pass before a PR can merge:
+There is no CI workflow — run these locally before opening a PR:
 
 - `uv run ruff check`
 - `uv run ruff format --check`

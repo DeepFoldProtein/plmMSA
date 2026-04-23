@@ -28,12 +28,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, JobStore]:
     return TestClient(app), store
 
 
-def test_submit_msa_without_token_is_401(client) -> None:
+def test_submit_msa_anonymous_enqueues(client) -> None:
+    """/v2/msa is intentionally open — submission is anonymous so callers can
+    hit the public server without minting a token. Abuse is bounded by the
+    per-IP rate limiter + queue backpressure."""
     tc, _ = client
     with tc as c:
         resp = c.post("/v2/msa", json={"sequences": ["MKTIIAL"], "model": "ankh_cl"})
-    assert resp.status_code == 401
-    assert resp.json()["code"] == "E_AUTH_MISSING"
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "queued"
 
 
 def test_submit_msa_enqueues(client) -> None:
@@ -67,11 +70,13 @@ async def test_get_msa_returns_record() -> None:
     assert fetched.result.payload.startswith(">query")
 
 
-def test_get_msa_without_token_is_401(client) -> None:
+def test_get_msa_anonymous_404_on_missing(client) -> None:
+    """Anonymous GET still works (same auth policy as submit), but unknown
+    job ids 404."""
     tc, _ = client
     with tc as c:
         resp = c.get("/v2/msa/does-not-exist")
-    assert resp.status_code == 401
+    assert resp.status_code == 404
 
 
 def test_get_msa_404_on_missing(client) -> None:
@@ -95,11 +100,13 @@ def test_submit_then_get(client) -> None:
     assert body["request"]["sequences"] == ["MKT"]
 
 
-def test_cancel_without_token_is_401(client) -> None:
+def test_cancel_anonymous_404_on_missing(client) -> None:
+    """Anonymous DELETE is allowed; the practical guard against drive-by
+    cancellation is that job ids are UUID4s (not enumerable)."""
     tc, _ = client
     with tc as c:
-        resp = c.delete("/v2/msa/any-id")
-    assert resp.status_code == 401
+        resp = c.delete("/v2/msa/does-not-exist")
+    assert resp.status_code == 404
 
 
 def test_cancel_flips_status(client) -> None:

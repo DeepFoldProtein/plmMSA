@@ -43,10 +43,12 @@ class PlmMSAError(Exception):
         code: ErrorCode | None = None,
         http_status: int | None = None,
         detail: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.detail = detail
+        self.headers = headers
         if code is not None:
             self.code = code
         if http_status is not None:

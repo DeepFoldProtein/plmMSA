@@ -56,12 +56,35 @@ services:
       ESM1B_DEVICE: ${ESM1B_DEVICE:-cuda:1}
       PROTTRANS_DEVICE: ${PROTTRANS_DEVICE:-cuda:2}
       ANKH_CL_CHECKPOINT: ${ANKH_CL_CHECKPOINT:-}
+      # PyTorch caching allocator — expandable segments give freed memory
+      # back to the driver more aggressively. Critical when this container
+      # shares a GPU with unrelated workloads; keeps resident VRAM from
+      # stacking up across requests. Recommended by the CUDA OOM error
+      # itself ("try setting expandable_segments:True to avoid fragmentation").
+      PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+      # Embedding result cache (optional — if unset, every request re-encodes).
+      # Keyed by sha256(model, sequence); see src/plmmsa/embedding/server.py.
+      PLMMSA_EMBEDDING_CACHE_URL: ${PLMMSA_EMBEDDING_CACHE_URL:-redis://cache-emb:6379}
+      PLMMSA_EMBEDDING_CACHE_TTL_S: ${PLMMSA_EMBEDDING_CACHE_TTL_S:-2592000}
+      # Optional Redis-backed shard path index. When set, `/embed_by_id/bin`
+      # resolves filename → folder via MGET instead of the /gpfs-hosted
+      # sqlite `index.db`. ~300x faster on cold cache. Populate once via
+      # `python -m plmmsa.tools.build_shard_index`. Unset = keep sqlite.
+      PLMMSA_SHARD_INDEX_REDIS_URL: ${PLMMSA_SHARD_INDEX_REDIS_URL:-redis://cache-seq:6379/0}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
       # Read-write: the embedding container writes first-download artifacts
       # here if HF_HUB_OFFLINE=0. Flip to :ro after the cache is warm on a
       # locked-down deployment.
       - ${MODEL_CACHE_DIR:-./model_cache}:/model_cache
+      # Precomputed ProtT5 shard store (optional). When
+      # PLMMSA_PROTT5_SHARD_ROOT resolves to a real path, the embedding
+      # container serves per-residue embeddings for those UniRef50 ids
+      # via POST /embed_by_id instead of running ProtT5 on the GPU.
+      # If the env var is unset, the fallback bind source `/dev/null`
+      # makes compose start cleanly; the ShardStore constructor logs a
+      # WARN and the endpoint 400s for model=prott5.
+      - ${PLMMSA_PROTT5_SHARD_ROOT:-/dev/null}:/shards/uniref50_t5/datasets:ro
     depends_on:
       cache-emb:
         condition: service_healthy
@@ -102,6 +125,19 @@ services:
       dockerfile: services/align/Dockerfile
     environment:
       PLMMSA_SETTINGS_FILE: /app/settings.toml
+      # OTalign's Sinkhorn + cost matrix run on the same device that
+      # produced the embeddings (Ankh-Large by default). We propagate
+      # the PLM device pins into the align container so OTalign can
+      # pick the matching GPU without a P2P copy.
+      ANKH_CL_DEVICE: ${ANKH_CL_DEVICE:-cuda:0}
+      ANKH_LARGE_DEVICE: ${ANKH_LARGE_DEVICE:-cuda:0}
+      ESM1B_DEVICE: ${ESM1B_DEVICE:-cuda:1}
+      PROTTRANS_DEVICE: ${PROTTRANS_DEVICE:-cuda:1}
+      PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
+      # Number of uvicorn worker processes. Each is a separate ASGI
+      # process sharing port 8083, so concurrent /align/bin requests
+      # from the worker fanout don't serialize on one event loop.
+      PLMMSA_ALIGN_UVICORN_WORKERS: ${PLMMSA_ALIGN_UVICORN_WORKERS:-4}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
     networks: [plmmsa_net]
@@ -111,6 +147,16 @@ services:
       timeout: 3s
       retries: 6
       start_period: 10s
+    # GPU reservation lets OTalign move Sinkhorn + cost matrix onto
+    # CUDA. Align is otherwise small; the GPU is idle when OTalign
+    # isn't the requested aligner.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+              count: all
     restart: unless-stopped
 
   # Three dedicated Redis instances, split by role so eviction policies,
@@ -211,6 +257,10 @@ services:
       PLMMSA_TAX_KEY_FORMAT: ${PLMMSA_TAX_KEY_FORMAT:-tax:{id}}
       # Embedding result cache.
       PLMMSA_EMB_REDIS_URL: ${PLMMSA_EMB_REDIS_URL:-redis://cache-emb:6379}
+      # Comma-separated PLM ids whose target embeddings the orchestrator
+      # should fetch via /embed_by_id (shard store) before falling back to
+      # /embed. Empty / unset = today's behavior (every target re-embedded).
+      PLMMSA_SHARD_MODELS: ${PLMMSA_SHARD_MODELS:-}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
     depends_on:

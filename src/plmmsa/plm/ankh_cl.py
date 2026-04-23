@@ -23,17 +23,25 @@ class AnkhCL(PLM):
         checkpoint: str,
         device: str | torch.device = "cuda:0",
         tokenizer_id: str = _TOKENIZER_ID,
+        dtype: torch.dtype = torch.float32,
     ) -> None:
         if not checkpoint:
             raise ValueError("AnkhCL requires a checkpoint (local path or HF repo id).")
         self.device = torch.device(device)
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
+        self.dtype = dtype
+        # `legacy=True` pins the pre-v4.33 T5 tokenization behavior we
+        # calibrated against; v5+'s "new" split adds an extra whitespace
+        # normalization step that shifts residue-to-token alignment.
+        # Silences the deprecation warning too.
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_id, legacy=True)
         model = _AnkhCLBackbone.from_pretrained(
             checkpoint,
             freeze_base=True,
             is_scratch=False,
         )
         self.model = model.to(self.device)  # pyright: ignore[reportArgumentType]
+        if dtype != torch.float32:
+            self.model = self.model.to(dtype)  # pyright: ignore[reportArgumentType]
         self.model.eval()
         self.dim = int(self.model.d_model)
 

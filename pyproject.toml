@@ -16,6 +16,13 @@ dependencies = [
     # numpy is used by plmmsa.align (PLMAlign SW/NW DP) and the orchestrator
     # (array construction before forwarding to services). Not optional.
     "numpy>=1.26",
+    # Prometheus counters / histograms for /metrics. Minimal surface, no
+    # async machinery — we just expose the text exposition format.
+    "prometheus-client>=0.20",
+    # numba JIT for the alignment DP kernels. Without it the pure-Python
+    # column/row-max gap recurrence in pLM-BLAST is ~100× slower than
+    # upstream. Wheel is small; no CUDA dependency.
+    "numba>=0.60",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +40,13 @@ embedding = [
 ]
 vdb = [
     "faiss-cpu>=1.8",
+]
+# Align needs torch too — OTalign's Sinkhorn solver runs on the PLM's
+# device. Split from `embedding` so the align image doesn't drag in
+# transformers / hf_hub / sentencepiece. Same torch pin for CUDA
+# runtime compatibility with the host driver.
+align = [
+    "torch>=2.4,<2.9",
 ]
 
 # NOTE: `procl` is vendored under `src/procl/` rather than declared as a
@@ -69,8 +83,15 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-# DP score matrices follow the math convention (M / X / Y).
+# DP score matrices + OT variables follow the math convention
+# (M / X / Y / H / C / P / S).
 "src/plmmsa/align/plmalign.py" = ["N803", "N806"]
+"src/plmmsa/align/plm_blast.py" = ["N803", "N806"]
+"src/plmmsa/align/otalign.py" = ["N803", "N806"]
+"src/plmmsa/align/otalign_dp.py" = ["N803", "N806"]
+"src/plmmsa/align/sinkhorn.py" = ["N803", "N806"]
+"src/plmmsa/align/sinkhorn_torch.py" = ["N803", "N806"]
+"tests/test_align_plm_blast.py" = ["N806"]
 
 [tool.pyright]
 include = ["src", "tests"]

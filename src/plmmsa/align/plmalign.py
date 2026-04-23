@@ -1,19 +1,29 @@
-"""Clean PLMAlign: affine-gap Smith-Waterman / Needleman-Wunsch over cosine
-similarity of per-residue embeddings.
+"""PLMAlign: affine-gap Smith-Waterman / Needleman-Wunsch on a similarity
+matrix.
 
-Authored fresh from the paper — not a port of the legacy plmalign_util code,
-which is a pLM-BLAST-derived multi-path algorithm we can re-add later as a
-second `Aligner`.
+This module owns the DP only — scoring policy (dot / cosine / dot_zscore)
+lives in `plmmsa.align.score_matrix`. The convenience `align()` entry
+point inherited from `Aligner` wires a `ScoreMatrixBuilder` + this DP, so
+callers still get a one-call API.
+
+The DP itself is our own affine-gap SW/NW with explicit M/X/Y matrices.
+Upstream's default pathfinder is pLM-BLAST's multi-path SW (border
+traversal, no explicit gap-open/extend split); see PLAN.md for the port.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
+import numba
 import numpy as np
 
-from plmmsa.align.base import Aligner, Alignment, AlignMode
+from plmmsa.align.base import Alignment, AlignMode, MatrixAligner
+
+# Kept at module level so existing test + downstream imports that read
+# `from plmmsa.align.plmalign import SCORE_MATRIX_CHOICES` keep working.
+# Canonical source is `plmmsa.align.score_matrix`.
+from plmmsa.align.score_matrix import SCORE_MATRIX_CHOICES  # noqa: F401
 
 _NEG_INF = np.float32(-1e9)
 
@@ -23,45 +33,43 @@ _X = 1  # gap in target (step i)
 _Y = 2  # gap in query  (step j)
 
 
-class PLMAlign(Aligner):
-    """Smith-Waterman / Needleman-Wunsch aligner over cosine similarity."""
+class PLMAlign(MatrixAligner):
+    """Affine-gap SW/NW on a PLM similarity matrix."""
 
     id = "plmalign"
     display_name = "PLMAlign (embedding-SW/NW, affine gap)"
+    default_score_matrix = "dot_zscore"
 
+    # Kept as attributes so settings can override them at align-service
+    # construction time without touching the DP code.
     DEFAULT_GAP_OPEN = 10.0
     DEFAULT_GAP_EXTEND = 1.0
-    DEFAULT_NORMALIZE = True
+    # Legacy alias — the base class now owns the value. Tests + older
+    # callers that reach into the class directly still see it.
+    DEFAULT_SCORE_MATRIX = "dot_zscore"
 
-    def align(
+    def align_matrix(
         self,
-        query_embedding: np.ndarray,
-        target_embeddings: Sequence[np.ndarray],
+        sim: np.ndarray,
         *,
         mode: AlignMode = "local",
         gap_open: float | None = None,
         gap_extend: float | None = None,
-        normalize: bool | None = None,
         **_: Any,
-    ) -> list[Alignment]:
+    ) -> Alignment:
+        if mode not in ("local", "global"):
+            raise ValueError(
+                f"PLMAlign supports mode='local'|'global'; got {mode!r}. "
+                "Use aligner='otalign' for glocal / q2t / t2q."
+            )
         go = float(gap_open) if gap_open is not None else self.DEFAULT_GAP_OPEN
         ge = float(gap_extend) if gap_extend is not None else self.DEFAULT_GAP_EXTEND
-        norm = self.DEFAULT_NORMALIZE if normalize is None else bool(normalize)
-
-        q = _normalize(query_embedding) if norm else np.asarray(query_embedding, dtype=np.float32)
-
-        results: list[Alignment] = []
-        for t_emb in target_embeddings:
-            t = _normalize(t_emb) if norm else np.asarray(t_emb, dtype=np.float32)
-            sim = q @ t.T
-            results.append(_align_pair(sim, mode=mode, gap_open=go, gap_extend=ge))
-        return results
-
-
-def _normalize(x: np.ndarray) -> np.ndarray:
-    arr = np.asarray(x, dtype=np.float32)
-    norms = np.linalg.norm(arr, axis=-1, keepdims=True)
-    return arr / np.clip(norms, 1e-12, None)
+        return _align_pair(
+            np.ascontiguousarray(sim, dtype=np.float32),
+            mode=mode,
+            gap_open=go,
+            gap_extend=ge,
+        )
 
 
 def _align_pair(
@@ -71,36 +79,18 @@ def _align_pair(
     gap_open: float,
     gap_extend: float,
 ) -> Alignment:
-    sim = np.ascontiguousarray(sim, dtype=np.float32)
     lq, lt = sim.shape
     go = np.float32(gap_open)
     ge = np.float32(gap_extend)
 
-    # Three score matrices; +1 row/col for the empty-prefix boundary.
-    M = np.full((lq + 1, lt + 1), _NEG_INF, dtype=np.float32)
-    X = np.full((lq + 1, lt + 1), _NEG_INF, dtype=np.float32)
-    Y = np.full((lq + 1, lt + 1), _NEG_INF, dtype=np.float32)
-
-    if mode == "local":
-        M[0, :] = 0.0
-        M[:, 0] = 0.0
-    else:
-        M[0, 0] = 0.0
-        for i in range(1, lq + 1):
-            X[i, 0] = -go - (i - 1) * ge
-        for j in range(1, lt + 1):
-            Y[0, j] = -go - (j - 1) * ge
-
-    for i in range(1, lq + 1):
-        for j in range(1, lt + 1):
-            s = sim[i - 1, j - 1]
-            prev = max(M[i - 1, j - 1], X[i - 1, j - 1], Y[i - 1, j - 1])
-            m_ij = prev + s
-            if mode == "local" and m_ij < 0.0:
-                m_ij = np.float32(0.0)
-            M[i, j] = m_ij
-            X[i, j] = max(M[i - 1, j] - go, X[i - 1, j] - ge)
-            Y[i, j] = max(M[i, j - 1] - go, Y[i, j - 1] - ge)
+    # DP fill is O(Lq * Lt) and runs in tight numeric loops — offload to
+    # numba so we get the ~50-100x speedup over pure Python. Traceback
+    # stays Python: path length <= Lq + Lt makes it fast enough without
+    # the JIT warmup cost.
+    M, X, Y = _fill_matrices_jit(
+        np.ascontiguousarray(sim, dtype=np.float32),
+        go, ge, int(np.int32(1 if mode == "local" else 0)),
+    )
 
     # Pick traceback start.
     if mode == "local":
@@ -182,3 +172,67 @@ def _traceback(
 
     columns.reverse()
     return columns
+
+
+@numba.njit(
+    numba.types.UniTuple(numba.float32[:, ::1], 3)(
+        numba.float32[:, ::1], numba.float32, numba.float32, numba.int32,
+    ),
+    cache=True, nogil=True, fastmath=True,
+)
+def _fill_matrices_jit(
+    sim: np.ndarray,
+    go: np.float32,
+    ge: np.float32,
+    is_local: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """JIT-compiled M/X/Y affine-gap fill.
+
+    Three matrices, each `(lq+1, lt+1)`. `is_local == 1` clamps M at 0
+    (Smith-Waterman); `== 0` uses the Needleman-Wunsch boundary
+    (cumulative gap penalty on the first row/col).
+
+    `nogil=True` so the outer thread-pool fanout across targets
+    actually parallelizes.
+    """
+    lq, lt = sim.shape
+    neg_inf = np.float32(-1e9)
+    M = np.full((lq + 1, lt + 1), neg_inf, dtype=np.float32)
+    X = np.full((lq + 1, lt + 1), neg_inf, dtype=np.float32)
+    Y = np.full((lq + 1, lt + 1), neg_inf, dtype=np.float32)
+
+    if is_local == 1:
+        for j in range(lt + 1):
+            M[0, j] = np.float32(0.0)
+        for i in range(lq + 1):
+            M[i, 0] = np.float32(0.0)
+    else:
+        M[0, 0] = np.float32(0.0)
+        for i in range(1, lq + 1):
+            X[i, 0] = -go - (i - 1) * ge
+        for j in range(1, lt + 1):
+            Y[0, j] = -go - (j - 1) * ge
+
+    for i in range(1, lq + 1):
+        for j in range(1, lt + 1):
+            s = sim[i - 1, j - 1]
+            prev = M[i - 1, j - 1]
+            v = X[i - 1, j - 1]
+            if v > prev:
+                prev = v
+            v = Y[i - 1, j - 1]
+            if v > prev:
+                prev = v
+            m_ij = prev + s
+            if is_local == 1 and m_ij < np.float32(0.0):
+                m_ij = np.float32(0.0)
+            M[i, j] = m_ij
+
+            x_open = M[i - 1, j] - go
+            x_ext = X[i - 1, j] - ge
+            X[i, j] = x_open if x_open > x_ext else x_ext
+
+            y_open = M[i, j - 1] - go
+            y_ext = Y[i, j - 1] - ge
+            Y[i, j] = y_open if y_open > y_ext else y_ext
+    return M, X, Y

@@ -62,21 +62,27 @@ def submit_and_wait(
     k: int,
     aligner: str,
     mode: str,
+    model: str,
 ) -> dict[str, Any]:
-    headers = {"Authorization": f"Bearer {token}"}
-    submit = client.post(
-        f"{api_url}/v2/msa",
-        headers=headers,
-        json={
-            "sequences": [target.query_seq],
-            "query_id": target.name,
-            "model": "ankh_cl",
-            "collection": collection,
-            "k": k,
-            "aligner": aligner,
-            "mode": mode,
-        },
-    )
+    # Auth is now optional on /v2/msa (public endpoint). Only send the
+    # header when a token was provided.
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    # Empty-string values mean "fall through to server defaults" — skip
+    # the field entirely so the API doesn't override its config-file
+    # defaults with a blank.
+    body: dict[str, Any] = {
+        "sequences": [target.query_seq],
+        "query_id": target.name,
+        "k": k,
+        "mode": mode,
+    }
+    if model:
+        body["model"] = model
+    if collection:
+        body["collection"] = collection
+    if aligner:
+        body["aligner"] = aligner
+    submit = client.post(f"{api_url}/v2/msa", headers=headers, json=body)
     submit.raise_for_status()
     job_id = submit.json()["job_id"]
 
@@ -129,16 +135,37 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--poll-interval", type=float, default=5.0)
     parser.add_argument("--poll-timeout", type=float, default=600.0)
-    parser.add_argument("--token", default=os.environ.get("ADMIN_TOKEN", ""))
-    parser.add_argument("--collection", default="ankh_uniref50")
+    parser.add_argument(
+        "--token",
+        default=os.environ.get("ADMIN_TOKEN", ""),
+        help=(
+            "Optional bearer token. /v2/msa is anonymous on the current "
+            "stack, but passing a minted token gets higher per-token rate "
+            "limits and shows up in the audit log."
+        ),
+    )
+    parser.add_argument(
+        "--collection",
+        default="",
+        help="VDB collection id; empty = server-default routing.",
+    )
     parser.add_argument("--k", type=int, default=50, help="FAISS neighbors per query.")
-    parser.add_argument("--aligner", default="plmalign")
+    parser.add_argument(
+        "--aligner",
+        default="",
+        help="Aligner id; empty = server default (plm_blast).",
+    )
+    parser.add_argument(
+        "--model",
+        default="",
+        help="Retrieval PLM id; empty = server default (aggregate ankh_cl + esm1b).",
+    )
     parser.add_argument("--mode", default="local")
     args = parser.parse_args(argv)
 
-    if not args.token:
-        print("ERROR: ADMIN_TOKEN not set. Pass --token or export ADMIN_TOKEN.", file=sys.stderr)
-        return 2
+    # /v2/msa is anonymous — no token required. We only warn so ops
+    # still know when the env is misconfigured for scenarios that DO
+    # need one (e.g. hitting a stack with auth still on /v2/msa).
 
     filter_names = set(args.targets.split(",")) if args.targets else None
     targets = load_targets(filter_names)
@@ -148,9 +175,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Running regression on {len(targets)} targets against {args.api_url}")
     failures = 0
+    per_target_wall: dict[str, float] = {}
+    per_target_pipeline: dict[str, float] = {}
+    total_start = time.monotonic()
     with httpx.Client(timeout=args.poll_timeout + 30) as client:
         for target in targets:
             print(f"\n--- {target.name} ({len(target.query_seq)} residues) ---")
+            wall_start = time.monotonic()
             try:
                 job = submit_and_wait(
                     client,
@@ -163,11 +194,26 @@ def main(argv: list[str] | None = None) -> int:
                     args.k,
                     args.aligner,
                     args.mode,
+                    args.model,
                 )
             except Exception as exc:
                 print(f"  FAIL: {exc}")
                 failures += 1
+                per_target_wall[target.name] = time.monotonic() - wall_start
                 continue
+            wall = time.monotonic() - wall_start
+            per_target_wall[target.name] = wall
+            # Pipeline time = finished_at - started_at from the job record;
+            # excludes queue wait (started_at - created_at) and client poll
+            # latency, so it's the stage we actually care about tuning.
+            if job.get("started_at") and job.get("finished_at"):
+                per_target_pipeline[target.name] = float(
+                    job["finished_at"] - job["started_at"]
+                )
+            print(
+                f"  wall={wall:.1f}s pipeline="
+                f"{per_target_pipeline.get(target.name, 0.0):.1f}s"
+            )
             ok, issues = evaluate(target, job)
             if ok:
                 print("  ok")
@@ -176,7 +222,11 @@ def main(argv: list[str] | None = None) -> int:
                 for issue in issues:
                     print(f"  FAIL: {issue}")
 
-    print(f"\n{len(targets) - failures}/{len(targets)} passed")
+    total_wall = time.monotonic() - total_start
+    print(f"\n{len(targets) - failures}/{len(targets)} passed  total_wall={total_wall:.1f}s")
+    if per_target_pipeline:
+        for name, sec in per_target_pipeline.items():
+            print(f"  {name}: pipeline {sec:.1f}s  wall {per_target_wall[name]:.1f}s")
     return 0 if failures == 0 else 1
 
 

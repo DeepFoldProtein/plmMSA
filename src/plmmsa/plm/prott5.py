@@ -18,15 +18,25 @@ class ProtT5(PLM):
     display_name = "ProtT5-XL-UniRef50"
     max_length = 1022
 
-    def __init__(self, device: str | torch.device = "cuda:1", hf_id: str = _HF_ID) -> None:
+    def __init__(
+        self,
+        device: str | torch.device = "cuda:1",
+        hf_id: str = _HF_ID,
+        dtype: torch.dtype = torch.float32,
+    ) -> None:
         self.device = torch.device(device)
+        self.dtype = dtype
         # Rostlab's ProtT5 ships a SentencePiece vocab that `transformers`
         # can't convert to its Unigram fast-tokenizer. Force the slow path.
+        # `legacy=True` pins the pre-v4.33 T5 tokenization behavior and
+        # silences the transformers deprecation warning.
         self.tokenizer = AutoTokenizer.from_pretrained(
-            hf_id, do_lower_case=False, use_fast=False
+            hf_id, do_lower_case=False, use_fast=False, legacy=True,
         )
         model = T5EncoderModel.from_pretrained(hf_id)
         self.model = model.to(self.device)  # pyright: ignore[reportArgumentType]
+        if dtype != torch.float32:
+            self.model = self.model.to(dtype)  # pyright: ignore[reportArgumentType]
         self.model.eval()
         self.dim = int(self.model.config.d_model)
 

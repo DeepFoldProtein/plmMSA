@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from plmmsa.config import ModelSettings, Settings
 from plmmsa.plm.ankh_cl import AnkhCL
 from plmmsa.plm.ankh_large import AnkhLarge
-from plmmsa.plm.base import PLM
+from plmmsa.plm.base import PLM, dtype_from_precision
 from plmmsa.plm.esm1b import ESM1b
 from plmmsa.plm.prott5 import ProtT5
 
@@ -17,19 +17,28 @@ logger = logging.getLogger(__name__)
 def _load_ankh_cl(cfg: ModelSettings, env: Mapping[str, str]) -> PLM:
     checkpoint = env.get(cfg.checkpoint_env_var or "", "")
     device = env.get(cfg.device_env_var, "cpu")
-    return AnkhCL(checkpoint=checkpoint, device=device)
+    return AnkhCL(checkpoint=checkpoint, device=device, dtype=dtype_from_precision(cfg.precision))
 
 
 def _load_ankh_large(cfg: ModelSettings, env: Mapping[str, str]) -> PLM:
-    return AnkhLarge(device=env.get(cfg.device_env_var, "cpu"))
+    return AnkhLarge(
+        device=env.get(cfg.device_env_var, "cpu"),
+        dtype=dtype_from_precision(cfg.precision),
+    )
 
 
 def _load_esm1b(cfg: ModelSettings, env: Mapping[str, str]) -> PLM:
-    return ESM1b(device=env.get(cfg.device_env_var, "cpu"))
+    return ESM1b(
+        device=env.get(cfg.device_env_var, "cpu"),
+        dtype=dtype_from_precision(cfg.precision),
+    )
 
 
 def _load_prott5(cfg: ModelSettings, env: Mapping[str, str]) -> PLM:
-    return ProtT5(device=env.get(cfg.device_env_var, "cpu"))
+    return ProtT5(
+        device=env.get(cfg.device_env_var, "cpu"),
+        dtype=dtype_from_precision(cfg.precision),
+    )
 
 
 LOADERS: dict[str, Callable[[ModelSettings, Mapping[str, str]], PLM]] = {

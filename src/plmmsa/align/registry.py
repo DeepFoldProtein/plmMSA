@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from plmmsa.align.base import Aligner
 from plmmsa.align.otalign import OTalign
+from plmmsa.align.plm_blast import PlmBlast
 from plmmsa.align.plmalign import PLMAlign
 from plmmsa.config import AlignerEntry, Settings
 
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 LOADERS: dict[str, Callable[[AlignerEntry], Aligner]] = {
     "plmalign": lambda _cfg: PLMAlign(),
+    "plm_blast": lambda _cfg: PlmBlast(),
     "otalign": lambda _cfg: OTalign(),
 }
 

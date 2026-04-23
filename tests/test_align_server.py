@@ -42,18 +42,22 @@ def test_align_plmalign_roundtrip() -> None:
     assert all(qi >= 0 and ti >= 0 for qi, ti in a["columns"])
 
 
-def test_align_otalign_returns_501() -> None:
+def test_align_otalign_roundtrip() -> None:
+    """OTalign is no longer a 501 stub — it runs the full unbalanced-
+    Sinkhorn pipeline. Sanity-check the align service can dispatch to it."""
     app = create_app(aligners_override={"otalign": OTalign()})
     payload = {
         "aligner": "otalign",
         "mode": "local",
-        "query_embedding": [[1.0, 0.0]],
-        "target_embeddings": [[[1.0, 0.0]]],
+        "query_embedding": [[1.0, 0.0], [0.0, 1.0]],
+        "target_embeddings": [[[1.0, 0.0], [0.0, 1.0]]],
     }
     with TestClient(app) as client:
         resp = client.post("/align", json=payload)
-    assert resp.status_code == 501
-    assert resp.json()["code"] == "E_NOT_IMPLEMENTED"
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["aligner"] == "otalign"
+    assert len(body["alignments"]) == 1
 
 
 def test_align_unknown_aligner() -> None:

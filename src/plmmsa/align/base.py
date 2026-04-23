@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
 
-AlignMode = Literal["local", "global"]
+AlignMode = Literal["local", "global", "glocal", "q2t", "t2q"]
+# "local"  — SW. Free start/end on both sides, negative-floor clamp.
+# "global" — NW. Pay end-gap cost on both sides.
+# "glocal" — semi-global. Free end-gaps on both sides.
+# "q2t"    — free query end-gap only (template is global).
+# "t2q"    — free template end-gap only (query is global).
+#
+# PLMAlign / pLM-BLAST only understand "local" / "global" today and
+# raise on the other three. OTalign accepts all five natively.
 
 
 @dataclass(slots=True)
@@ -56,14 +66,31 @@ class Alignment:
 class Aligner(ABC):
     """Pairwise aligner over per-residue PLM embeddings.
 
-    Concrete subclasses declare `id` / `display_name` and implement `align`.
-    Keyword arguments (`gap_open`, `gap_extend`, `normalize`, …) are passed
-    through `**kwargs` so callers can override backend-specific tunables
-    without changing the interface.
+    The base contract is one method:
+
+        align(query, targets, *, mode, **kw) -> list[Alignment]
+
+    Two flavors of subclass exist because not every algorithm can consume
+    a precomputed similarity matrix:
+
+    - **Matrix aligners** (`MatrixAligner`). The algorithm acts on a
+      pairwise similarity matrix after it's been built by a
+      `ScoreMatrixBuilder`. PLMAlign (affine-gap SW), pLM-BLAST
+      (multi-path SW) live here. These subclasses implement
+      `align_matrix(sim, ...)` and inherit a default `align()` that
+      composes builder + `align_matrix`.
+    - **Embedding aligners**. The algorithm needs the raw embeddings —
+      e.g. Sinkhorn-based OT where the cost matrix is recomputed (or
+      updated) every iteration. These subclasses override `align()`
+      directly and never build a precomputed matrix.
+
+    The `align_matrix` method on the base raises `NotImplementedError` by
+    default so embedding-aligners don't have to stub it.
     """
 
     id: str
     display_name: str
+    default_score_matrix: str = "dot_zscore"
 
     @abstractmethod
     def align(
@@ -74,9 +101,113 @@ class Aligner(ABC):
         mode: AlignMode = "local",
         **kwargs: Any,
     ) -> list[Alignment]:
-        """Align `query_embedding` against each entry in `target_embeddings`.
+        """Align `query_embedding` against each target; one Alignment per target."""
+        ...
 
-        Shapes: `query_embedding` is `[Lq, D]`; each target is `[Lt_i, D]`. The
-        returned list has one `Alignment` per target, in the same order.
+    def align_matrix(
+        self,
+        sim: np.ndarray,
+        *,
+        mode: AlignMode = "local",
+        **kwargs: Any,
+    ) -> Alignment:
+        """Optional fast path for matrix-consuming aligners. Default raises
+        so embedding-only aligners (Sinkhorn, neural) aren't forced to stub."""
+        raise NotImplementedError(
+            f"{type(self).__name__} is an embedding aligner — call align() directly"
+        )
+
+
+class MatrixAligner(Aligner):
+    """Aligner that operates on a precomputed `[Lq, Lt]` similarity matrix.
+
+    Subclasses implement `align_matrix` only; the default `align()` below
+    composes a `ScoreMatrixBuilder` with per-target dispatch. This keeps
+    scoring policy (dot_zscore / cosine / dot / future GPU variants) and
+    alignment algorithm (affine-gap SW, pLM-BLAST multi-path SW, ...)
+    orthogonal.
+    """
+
+    @abstractmethod
+    def align_matrix(
+        self,
+        sim: np.ndarray,
+        *,
+        mode: AlignMode = "local",
+        **kwargs: Any,
+    ) -> Alignment:
+        """Align one `[Lq, Lt]` similarity matrix → one Alignment.
+
+        Backend-specific tunables (gap_open, gap_extend, ...) ride on
+        kwargs; the concrete subclass documents its own options.
         """
         ...
+
+    def align(
+        self,
+        query_embedding: np.ndarray,
+        target_embeddings: Sequence[np.ndarray],
+        *,
+        mode: AlignMode = "local",
+        score_matrix: str | None = None,
+        normalize: bool | None = None,  # legacy alias: True → cosine, False → dot
+        **kwargs: Any,
+    ) -> list[Alignment]:
+        # Lazy import keeps the base free of matrix-construction details.
+        from plmmsa.align.score_matrix import get_builder
+
+        sm = score_matrix or self.default_score_matrix
+        if score_matrix is None and normalize is not None:
+            sm = "cosine" if normalize else "dot"
+
+        builder = get_builder(sm)
+        query = np.asarray(query_embedding, dtype=np.float32)
+        targets = [np.asarray(t, dtype=np.float32) for t in target_embeddings]
+        sim_matrices = builder.build(query, targets)
+
+        # Thread-pool fanout across targets. The DP kernels are JIT-
+        # compiled with `nogil=True`, so threads actually parallelize
+        # instead of being serialized by the GIL. Small batches skip
+        # the pool overhead and run sequentially.
+        n = len(sim_matrices)
+        pool_size = _resolve_pool_size()
+        if n <= 1 or pool_size <= 1:
+            return [
+                self.align_matrix(sim, mode=mode, **kwargs) for sim in sim_matrices
+            ]
+        with ThreadPoolExecutor(max_workers=min(pool_size, n)) as ex:
+            return list(
+                ex.map(
+                    lambda sim: self.align_matrix(sim, mode=mode, **kwargs),
+                    sim_matrices,
+                )
+            )
+
+
+def _resolve_pool_size() -> int:
+    """Pool size for within-job target fanout.
+
+    Precedence (highest first):
+      1. `PLMMSA_ALIGN_THREADS` env var (per-process override; useful for
+         tests and one-off tuning).
+      2. `settings.queue.align_threads` when non-zero (operator default).
+      3. `min(os.cpu_count(), 32)` as a safety cap so we don't spawn
+         hundreds of threads on machines with many cores.
+
+    Returns 1 to force sequential execution (useful in tests / repros).
+    """
+    raw = os.environ.get("PLMMSA_ALIGN_THREADS")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    try:
+        from plmmsa.config import get_settings
+
+        configured = int(get_settings().queue.align_threads)
+        if configured > 0:
+            return configured
+    except Exception:
+        pass
+    return min(32, os.cpu_count() or 1)

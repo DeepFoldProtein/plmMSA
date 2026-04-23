@@ -25,7 +25,12 @@ class _StubAsyncClient:
     async def __aexit__(self, *args) -> None:
         return None
 
-    async def post(self, url: str, json: dict | None = None) -> _StubResponse:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        headers: dict | None = None,
+    ) -> _StubResponse:
         assert url.endswith("/align"), f"unexpected upstream url: {url}"
         assert json is not None
         assert {"aligner", "mode", "query_embedding", "target_embeddings"} <= json.keys()

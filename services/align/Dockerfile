@@ -10,10 +10,13 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY uv.lock* ./
-RUN uv sync --no-install-project || uv sync
+# OTalign needs torch for its Sinkhorn + cost-matrix (runs on the PLM
+# device). Install the `align` extra so torch lives in the image; other
+# aligners (PLMAlign, pLM-BLAST) are numba-only and don't need it.
+RUN uv sync --extra align --no-install-project || uv sync --extra align
 
 COPY src/ ./src/
-RUN uv sync --no-editable
+RUN uv sync --extra align --no-editable
 
 EXPOSE 8083
 

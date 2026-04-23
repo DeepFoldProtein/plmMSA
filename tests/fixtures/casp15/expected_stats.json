@@ -1,12 +1,14 @@
 {
-  "_comment": "Regression baselines for bench/run_regression.py. The `msa_depth` field is the plmMSA rebase's observed output (ankh_cl + full ankh_uniref50_vdb.faiss + PLMAlign local + cache-seq prefix `seq:UniRef50_{id}`) at k=500, chunked embedding. `legacy_*` fields are for reference only — they were recorded from the pre-rebase PLMAlign stack at k~3000 with post-score filtering, which drives the ~3x-higher depth and is not a like-for-like comparison. Depth = k + 1 (query + hits) when every FAISS hit resolves to a cache-seq entry.",
+  "_comment": "Regression baselines for bench/run_regression.py. BASELINES ARE STALE vs. current defaults — `msa_depth` + top-hit scores below were recorded under `aligner=plmalign` + `score_matrix=cosine` at k=500. Current defaults are `aligner=plm_blast` + `score_matrix=dot_zscore`. Rerun the bench to regenerate this file before using it to gate on-disk diffs. `legacy_*` fields are independent — pre-rebase PLMAlign at k~3000 with post-score filtering; kept for historical reference, not comparable to current runs.",
   "operating_profile": {
     "model": "ankh_cl",
     "collection": "ankh_uniref50",
     "aligner": "plmalign",
     "mode": "local",
     "k": 500,
-    "sequence_key_format": "seq:UniRef50_{id}"
+    "score_matrix": "cosine",
+    "sequence_key_format": "seq:UniRef50_{id}",
+    "_stale": true
   },
   "targets": {
     "T1104": {

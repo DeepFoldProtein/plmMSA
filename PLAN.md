@@ -6,7 +6,7 @@ this file is the check-list view of what shipped and what is next.
 ## Shipped
 
 ### M1 — bootable skeleton
-- [x] Canonical repo foundation (LICENSE, NOTICE, CONTRIBUTING, CHANGELOG, .gitignore, `.github/` CI + templates).
+- [x] Canonical repo foundation (LICENSE, NOTICE, CONTRIBUTING, CHANGELOG, .gitignore, `.github/` issue + PR templates).
 - [x] `uv` + `pyproject.toml`, Python 3.11, `src/plmmsa/` layout.
 - [x] Configuration: `settings.toml` (non-secret tunables) + `.env` (secrets + host paths), `*.example` committed.
 - [x] Error taxonomy (`plmmsa.errors`) with stable codes: `E_SEQ_TOO_LONG`, `E_GPU_OOM`, `E_QUEUE_FULL`, `E_AUTH_*`, `E_CANCELLED`, …
@@ -147,6 +147,282 @@ ICN06, Seoul/Incheon).
       `expected_stats.json` (legacy depths kept as `legacy_msa_depth`
       for reference; not a like-for-like comparison).
 
+## Discussion — design unknowns to settle before building
+
+### Service capacity — how many jobs?
+
+Open question: what's the per-host throughput target on `deepfold`
+(2× RTX 6000 Ada, 48 GB each)?
+
+Known cost profile from the April-2026 CASP15 benchmark
+(`docs/submitting-msa.md` recipes, k=1000, both Ankh-CL + ESM-1b
+retrieval):
+- PLMAlign + ProtT5 shards (warm cache): ~30-60 s/job end-to-end,
+  dominated by `/embed_by_id/bin` path resolution on sqlite (13+ s)
+  → **being replaced by Redis path index** (expected ~5 ms).
+- OTalign + Ankh-Large (live re-embed): ~20-40 s/job, dominated by
+  Ankh-Large forward (~10 s Phase 4) + Sinkhorn+DP (~15-25 s Phase 5).
+
+Rough steady-state capacity (single `worker` container,
+`worker_concurrency = 4`):
+- At 30 s/job × 4 concurrent = **~8 jobs/minute = ~480/hour**.
+- `embedding` service is the shared bottleneck (Ankh-Large forward
+  is serial per-request on one CUDA stream). Scaling horizontally
+  means adding PLM replicas on more GPUs, not more worker containers.
+
+Decisions to make:
+- **Public rate limit vs. backpressure threshold.** Currently
+  `queue.backpressure_threshold = 50` triggers `503 E_QUEUE_FULL`.
+  At 30 s/job that is ~25 minutes of queued work — too long.
+  Propose: drop to 20 (~10 min) or expose the wait-time estimate
+  on the `POST /v2/msa` response.
+- **Per-token priority lanes.** Authenticated clients (academic lab
+  partners, example notebooks) may want guaranteed headroom.
+  Simple: two Redis lists (`jobs:priority`, `jobs:standard`),
+  worker drains priority first. Requires token-class metadata in
+  the auth layer.
+- **Scale-out story.** `docker compose up --scale worker=N` works
+  for the worker, but multi-host embedding (Ankh-Large replica on
+  a second machine) is an open topic. Until then, the single-host
+  cap is the ceiling.
+
+### plmMSA Web Server — static submit-a-job page
+
+**Purely static HTML + JS.** Zero new server endpoints. State lives
+in two places only: URL query parameters and `localStorage`. The
+server stays a stateless JSON API; deployment is "copy the built
+files to `services/api/public/`" and FastAPI's `StaticFiles` hands
+them out.
+
+Routing via query parameters (no hash router, no history API
+juggling beyond `replaceState`):
+
+- `/?seq=MKT...` — submit form pre-filled with that sequence.
+- `/?job=<uuid>` — poll + render a single job (shareable link).
+- `/?jobs=<uuid>,<uuid>,...` — dashboard view of an ad-hoc list.
+- `/` — pull the cached job list from `localStorage` and render
+  the same dashboard.
+
+Behaviour:
+
+- **Cache.** `localStorage.plmmsa.jobs` holds an array of
+  `{id, submittedAt, label, lastStatus}` records. Every submission
+  appends; every poll updates `lastStatus`. Never pruned
+  automatically — a "clear" button exposes the list.
+- **Refresh loop.** On load, iterate the cached list; for each
+  non-terminal id, fire `GET /v2/msa/{id}`. Tab-visible → 5 s
+  poll; tab-hidden → 60 s. Stop polling an id once status is
+  terminal (succeeded / failed / cancelled). Exponential back-off
+  on 5xx with a max of ~5 min.
+- **Rendering.** On any terminal `succeeded`, pull `result.payload`
+  (the A3M string), convert to FASTA client-side, feed to
+  `msa-viewer` (https://github.com/intermine/msa-viewer). Download
+  A3M button next to it. Stats (`hits_pre_filter`,
+  `hits_post_filter`, `filter_applied`, `filter_threshold`) in a
+  collapsed `<details>` block.
+- **Sharing.** Copy-link writes `?job=<uuid>` to the URL bar. The
+  recipient's static page reads the query and polls — no
+  server-side sharing state needed.
+
+Stack: vanilla TypeScript + Vite + pnpm. One page, no router, no
+framework. Dev loop is `pnpm dev` against a running `api`; prod
+output is a handful of static files under `services/api/public/`.
+
+Explicitly out of scope: user accounts, server-side shared job
+namespaces, personalization. If the page needs any of that, move it
+behind the admin auth layer instead.
+
+### Paired MSA generation + ColabFold drop-in API
+
+Goal: ColabFold notebooks + Boltz / Protenix / AlphaFold pipelines
+should be able to swap their MMseqs2 MSA server URL for plmMSA's and
+get sensible results.
+
+Upstream references to clone + study (into `.external/` during
+development, gitignored — not vendored in the tree):
+
+- **ColabFold MsaServer**: https://github.com/sokrypton/ColabFold
+  (`MsaServer/` subdir). Flask app wrapping MMseqs2; defines the
+  over-the-wire contract that's become the de-facto standard.
+- **MMseqs2**: https://github.com/soedinglab/MMseqs2. The pairing
+  logic lives in `src/workflow/PairAlign.cpp` (roughly): take
+  per-chain MSAs, group hits by UniProt accession across chains,
+  emit only rows where every chain has a hit under the same
+  accession. Our equivalent needs the `seq:` Redis keyspace plus
+  a `tax:` lookup, which `build_sequence_cache.py` already
+  populates from UniRef50 headers.
+
+Pairing method to document (write-up → `docs/paired-msa.md`),
+modelled on MMseqs2's `PairAlign`:
+
+1. Run per-chain plmMSA with a **larger `k`** than unpaired requests
+   use. Taxonomy-pairing is a filter, so the per-chain pool needs
+   headroom. Target a `paired_k = multiplier * effective_k` (start
+   with `multiplier = 3`; tune). Capped at `limits.max_k` so
+   operators can keep the GPU load bounded.
+2. For each chain's hits, resolve `hit_id → (uniprot_accession,
+   taxonomy_id)`. UniRef50 cluster representatives carry this in
+   their FASTA header (`TaxID=<n>`); we already persist it as
+   `tax:UniRef50_<acc>` via `build_sequence_cache.py`.
+3. **MMseqs `PairAlign` algorithm** (translate from
+   `MMseqs2/src/workflow/PairAlign.cpp`): bucket hits by taxonomy id;
+   for each taxonomy that appears in every chain, pick the
+   **highest-scoring representative per chain**; emit one paired
+   row per shared taxonomy. Drop taxonomies that miss any chain.
+4. Output one paired A3M: each row concatenates the chain-aligned
+   sequences, separated by a deliberate gap run (length =
+   `max(chain_lengths) // 10`, matches ColabFold convention).
+5. **Rank by joint score** — sum of per-chain alignment scores for
+   each paired row. Optional joint threshold — reuse the per-aligner
+   `filter_enabled` first, add a paired-specific knob only if
+   calibration demands it.
+
+Scope: **pair on UniRef50 representatives only.** The taxonomy
+stored in `tax:UniRef50_<acc>` (from the cluster representative's
+FASTA header) is authoritative — no cluster-member expansion, no
+UniParc lookups, no supplementary taxonomy sources. Simpler, and it
+keeps the pairing surface identical to retrieval's id namespace.
+
+Open question:
+- **Multiplier calibration.** Start at `paired_k = 3 × k`; rerun the
+  CASP15 multimer fixtures with 2×, 5×, 10× and pick the knee.
+  Target deepfold2's paired coverage as the calibration anchor.
+
+### Downstream-model integration guide
+
+All three engines accept an **MSA API URL argument** — the
+integration is "point the engine at our host" rather than "write a
+custom A3M fetcher per engine". Sibling repo (`plmmsa-examples`)
+remains the primary target per CLAUDE.md; the in-repo docs cover the
+minimum drop-in recipe — just the flag / config key to set.
+
+Write-up → `docs/integrations/`:
+
+- **ColabFold** (https://github.com/sokrypton/ColabFold). The
+  `colabfold_batch` CLI takes `--host-url <URL>`. Recipe:
+  `colabfold_batch --host-url https://plmmsa.deepfold.org/v2/colabfold/plmmsa ...`
+  (or `.../otalign`). `colabfold_batch` appends the MsaServer route
+  (`/ticket/msa`, etc.) to whatever base URL you pass, so our
+  compat routers sit under the `/v2/` namespace with one sub-path
+  per aligner flavor — see below.
+- **Boltz** (https://github.com/jwohlwend/boltz). `boltz predict`
+  CLI takes `--use_msa_server --msa_server_url <URL>`. Recipe
+  (PLMAlign flavor): `boltz predict --use_msa_server --msa_server_url https://plmmsa.deepfold.org/v2/colabfold/plmmsa ...`.
+  Swap `.../plmmsa` for `.../otalign` to use OTalign instead.
+  (Boltz speaks the ColabFold MsaServer wire shape, so the
+  compat entrypoint is the right target.)
+- **Protenix** (https://github.com/bytedance/Protenix). Exposes an
+  MSA server URL in its inference config — also targets the
+  ColabFold MsaServer wire shape, so the plmMSA URL to set is
+  `https://plmmsa.deepfold.org/v2/colabfold/plmmsa` (or
+  `.../otalign`). Confirm exact config key when writing up the
+  recipe (clone into `.external/`).
+
+For each: one short README, one example invocation, screenshot.
+Target "paste-the-flag" level; deeper integration questions go to
+the upstream project's issues.
+
+**Dev workflow**: clone each repo into `.external/` (gitignored)
+during write-up to confirm the exact flag name / config key.
+Do **not** vendor them — we link to upstream and document only.
+
+### ColabFold-compatible entrypoints — `/v2/colabfold/{plmmsa,otalign}/*`
+
+`colabfold_batch --host-url` and the ColabFold notebook talk the
+MMseqs2 MsaServer wire shape. Our native `/v2/msa` carries plmMSA-
+specific fields (aligner, mode, score_model, filter), so we ship
+**two parallel namespaces** that speak CF's exact shape, each
+hardwiring a different aligner internally:
+
+- `/v2/colabfold/plmmsa/*` — PLMAlign (our default; fast via ProtT5
+  shard store).
+- `/v2/colabfold/otalign/*` — OTalign (Sinkhorn + position-specific
+  DP, Ankh-Large scoring; slower but upstream's default pairing).
+
+Clients pick the flavor by setting `--host-url`; CF doesn't know or
+care which is which. This also means we don't have to stuff aligner
+selection into CF's form schema (it can't carry it anyway).
+
+**Routes per namespace** (`<flavor>` ∈ `plmmsa` | `otalign`,
+match ColabFold's MsaServer verbatim — reference at
+https://github.com/sokrypton/ColabFold/tree/main/MsaServer):
+
+- `POST /v2/colabfold/<flavor>/ticket/msa` — CF form-encoded body
+  (`q`, `mode`, `database`). Returns
+  `{"id": <ticket>, "status": "PENDING"}`.
+- `POST /v2/colabfold/<flavor>/ticket/pair` — same shape, paired
+  multimer.
+- `GET /v2/colabfold/<flavor>/ticket/msa/<ticket>` — status.
+  Returns `{"id", "status"}` with
+  `PENDING | RUNNING | COMPLETE | ERROR | UNKNOWN`.
+- `GET /v2/colabfold/<flavor>/result/download/<ticket>` — tar
+  matching CF's expectation: `uniref.a3m` (unpaired) +
+  `pair.a3m` (paired, otherwise empty) +
+  `bfd.mgnify30.metaeuk30.smag30.a3m` (we emit the plmMSA A3M
+  under that name for compat).
+
+**Implementation** — one router, two registrations:
+
+- `plmmsa.api.routes.colabfold` — factory function
+  `make_router(aligner: str) -> APIRouter`. Each call returns a
+  router that hardwires the chosen aligner in its `SubmitRequest`
+  builder; the routing handlers themselves are identical.
+- App wiring:
+  ```python
+  app.include_router(make_router("plmalign"),
+                     prefix="/v2/colabfold/plmmsa", tags=["colabfold"])
+  app.include_router(make_router("otalign"),
+                     prefix="/v2/colabfold/otalign", tags=["colabfold"])
+  ```
+- **Translation layer**, not a separate pipeline. Each CF endpoint
+  reuses the existing `/v2/msa` job lifecycle:
+  - `POST .../ticket/msa` → parse CF body → build our
+    `SubmitRequest` with `aligner=<flavor-aligner>`, server-default
+    models + score_model + filter_by_score → `JobStore.enqueue`
+    → respond `{id: <job_id>, status: "PENDING"}`.
+  - `GET .../ticket/msa/<id>` → look up job → map status
+    `{queued → PENDING, running → RUNNING, succeeded → COMPLETE,
+    failed/cancelled → ERROR}`.
+  - `GET .../result/download/<id>` → fetch `JobResult.payload`
+    (A3M) → wrap in CF's tar layout → stream as
+    `application/octet-stream`.
+- **Ticket id = plmMSA job id.** Reuses existing storage; no
+  second job table. The flavor is encoded in the job record via
+  the stamped aligner — status / download handlers don't need to
+  know which flavor claimed the id.
+- **`database` arg accepted but ignored.** CF's `uniref` / `envdb`
+  maps to our aggregate VDBs regardless. Log at INFO when a
+  non-default value appears.
+
+**Client recipes**:
+
+```sh
+# PLMAlign (default, fast)
+colabfold_batch --host-url https://plmmsa.deepfold.org/v2/colabfold/plmmsa \
+    input.fasta outdir/
+
+# OTalign (Sinkhorn + position-specific DP)
+colabfold_batch --host-url https://plmmsa.deepfold.org/v2/colabfold/otalign \
+    input.fasta outdir/
+```
+
+Same `--host-url` swap works for `boltz predict --msa_server_url` and
+Protenix's MSA-server config key.
+
+**Auth**. CF's public MsaServer is anonymous; both
+`/v2/colabfold/*` namespaces mirror that — same rate-limit story
+as `/v2/msa` (Cloudflare + slowapi).
+
+**Paired MSAs**. `POST .../ticket/pair` only becomes useful once
+our paired-MSA path ships. Scaffold now with a `501 Not Implemented`
+body explaining the gap; wire the real handler when paired pairing
+lands.
+
+**Testing**. The contract is the CF wire shape, so the fixture is a
+captured `colabfold_batch` submission. Record one interaction per
+flavor (request + expected response) and replay through FastAPI's
+`TestClient` — that's the regression we gate on.
+
 ## Deferred — pick up after the first real MSA ships
 
 - [ ] Paired MSA across chains with UniProt-ID → taxonomy lookup (sibling Redis or shared cache).
@@ -159,7 +435,34 @@ ICN06, Seoul/Incheon).
 - [ ] Internal admin UI (HTML; the JSON API under `/admin/*` is the underlying transport).
 - [ ] External web frontend (submit-a-job page, thin client over `/v2/*`).
 - [ ] Sibling `plmmsa-examples` repo: ColabFold notebook + AlphaFold / OpenFold / Boltz / Protenix integration recipes.
-- [ ] GHCR image releases on tag (CI workflow extension).
+- [ ] GHCR image releases on tag (manual `docker push` until a CI
+      workflow is added back).
+- [ ] **Finish pLM-BLAST acceleration.** Numba-JIT landed for the DP
+      fill (matches PLMAlign's 1 ms/target on small matrices), but a
+      32-target benchmark with the thread-pool fanout took >5 min —
+      likely numba dispatcher contention on first-compile or
+      per-task pool overhead swamping the gain. Profile + pick a
+      remedy: (a) eager-compile via explicit signature strings so no
+      thread races the JIT, (b) switch the per-target fanout to
+      `numba.prange` inside a jitted outer loop, (c) port the whole
+      pipeline to torch. Default aligner stays `plmalign` (fast,
+      JIT'd) until plm_blast is demonstrably competitive.
+- [ ] **Cross-PLM scoring** (`aligners.plmalign.score_model`). Today the
+      score matrix is built from the *same* PLM that searched the VDB; this
+      entry lands an operator-configurable override that re-embeds the
+      query + targets with a different PLM before scoring. Requires an
+      orchestrator rework: after the VDB-search step, the worker looks up
+      `score_model` in the enabled PLM set and routes an extra embed pass
+      (with shard-store shortcut when available). Cost: one extra embed
+      round-trip per hit in the non-cached path; zero when the
+      `score_model` has a shard store mount. Useful for "search cheap,
+      score with a bigger model" deployments.
+- [ ] **Precomputed-shard stores for Ankh family.** ProtT5 shards already
+      land via `settings.models.prott5.shard_root`; a matching store for
+      Ankh-Large / Ankh-CL would cut target-embedding cost on the default
+      aggregate path. Requires a one-time offline pass over UniRef50 to
+      produce per-sequence `.pt` files + an SQLite index; reuses the
+      existing `ShardStore` reader unchanged.
 
 ## Open-source readiness
 

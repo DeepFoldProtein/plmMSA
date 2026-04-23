@@ -18,13 +18,58 @@ cache_port = 6379
 [aligners.plmalign]
 display_name = "PLMAlign (embedding-SW/NW, affine gap)"
 enabled = true
+# Apply upstream Algorithm 1 step 5 filter: drop hits with alignment
+# score below min(0.2 * len(Q), 8.0). Aligner-specific because the
+# threshold assumes dot-product alignment scores.
+filter_enabled = true
+# Scoring mode for the residue-pair similarity matrix.
+# "dot_zscore" matches upstream PLMAlign (raw dot product + global Z-score).
+# "cosine" L2-normalizes each per-residue vector then dots (scores in [-1,1]).
+# "dot" is raw dot product with no normalization — debug / research only.
+score_matrix = "dot_zscore"
+gap_open = 10.0
+gap_extend = 1.0
+# Cross-PLM scoring. Upstream pairs PLMAlign with ProtT5. Empty = score
+# with whichever PLM searched the VDB (per-model aggregate).
+score_model = "prott5"
+# "cpu" = numpy builders. "cuda:0" (or any torch device) swaps in
+# torch-backed builders at startup. Client API unchanged either way.
+score_matrix_device = "cpu"
+
+[aligners.plm_blast]
+display_name = "pLM-BLAST (multi-path SW + span extraction)"
+# Upstream PLMAlign's default pathfinder. Enabled + picked as the
+# orchestrator's default aligner. Regenerate bench/run_regression.py
+# baselines before trusting the CASP15 regression for CI.
+enabled = true
+# Same dot-product alignment score scale as PLMAlign.
+filter_enabled = false
+score_matrix = "dot_zscore"
+gap_penalty = 0.0
+min_span = 20
+window_size = 20
+sigma_factor = 1.0
+border_stride = 1
+score_model = "prott5"
+score_matrix_device = "cpu"
 
 [aligners.otalign]
-display_name = "OTalign (not yet implemented)"
-enabled = false
+display_name = "OTalign (unbalanced Sinkhorn + position-specific DP)"
+enabled = true
+# OTalign's score is transport-plan mass sum (~[0, 1]); the upstream
+# (0.2*L, 8.0) threshold zeroes every hit on this scale. Off until
+# an OTalign-specific calibration is dialed in.
+filter_enabled = false
+# OTalign pairs with Ankh-Large by default (upstream convention).
+score_model = "ankh_large"
+# Torch device. Empty = auto (cuda if available, else cpu).
+device = ""
 
 # PLM backends. device_env_var / checkpoint_env_var name the env vars to read
 # for device pinning and (optional) local checkpoint paths.
+# `precision`: "fp32" (default), "bf16", or "fp16". bf16 halves VRAM with
+# no accuracy loss on this family; fp16 is an option on Volta/Turing GPUs
+# that lack bf16 support. Requires an embedding-container restart.
 [models.ankh_cl]
 display_name = "Ankh-CL (DeepFold contrastive fine-tune)"
 hf_tokenizer_id = "ElnaggarLab/ankh-large"
@@ -32,6 +77,7 @@ max_length = 1022
 device_env_var = "ANKH_CL_DEVICE"
 checkpoint_env_var = "ANKH_CL_CHECKPOINT"
 enabled = true
+precision = "fp32"
 
 [models.ankh_large]
 display_name = "Ankh-Large"
@@ -39,6 +85,7 @@ hf_tokenizer_id = "ElnaggarLab/ankh-large"
 max_length = 1022
 device_env_var = "ANKH_LARGE_DEVICE"
 enabled = true
+precision = "fp32"
 
 [models.esm1b]
 display_name = "ESM-1b"
@@ -46,6 +93,7 @@ hf_tokenizer_id = "facebook/esm1b_t33_650M_UR50S"
 max_length = 1022
 device_env_var = "ESM1B_DEVICE"
 enabled = true
+precision = "fp32"
 
 [models.prott5]
 display_name = "ProtT5-XL-UniRef50"
@@ -53,6 +101,13 @@ hf_tokenizer_id = "Rostlab/prot_t5_xl_uniref50"
 max_length = 1022
 device_env_var = "PROTTRANS_DEVICE"
 enabled = true
+precision = "fp32"
+# (Optional) Precomputed embedding shard store — serves /embed_by_id from
+# disk and bypasses the model entirely. Uncomment + bind-mount on hosts
+# that have the dataset. `shard_root` is the in-container path.
+# shard_root = "/shards/uniref50_t5/datasets"
+# shard_fallback_dirs = ["missing_embeddings", "missing_embeddings_2"]
+# shard_dim = 1024
 
 # Vector-DB collections. Paths are relative to VDB_DATA_DIR (bind-mounted
 # read-only into the vdb service). `model_backend` names the PLM whose
@@ -77,6 +132,13 @@ nprobe = 100
 normalize = true
 enabled = true
 
+# Embedding service runtime tunables.
+[embedding]
+# Call torch.cuda.empty_cache() after every /embed so the allocator returns
+# freed segments to the driver. Small per-request cost; big win when the
+# embedding container shares a GPU with unrelated workloads.
+empty_cache_after_request = true
+
 # Input validation limits enforced at the API edge.
 [limits]
 max_residues_per_chain = 1022
@@ -97,6 +159,22 @@ embedding_cache_max_age_days = 90
 worker_concurrency = 4
 backpressure_threshold = 50
 max_queue_depth = 200
+# Default FAISS neighbors fetched per model when the client omits `k` on
+# POST /v2/msa. Per-request `k` still wins (capped at 10000 by the API).
+# 1000 matches upstream deepfold2's typical operating point.
+default_k = 1000
+# Target-embedding batch size. Peak VRAM for the target-embed step is
+# roughly embed_chunk_size * max_residues_per_chain * dim * 4 bytes.
+# Length-descending sort means only the first chunk pays full-length
+# padding cost. 256 fills a 48 GB GPU at max_length=1022 in fp32;
+# drop to 64 on smaller GPUs.
+embed_chunk_size = 256
+# Within-job thread-pool size for the aligner. Each target's DP runs
+# independently; JIT-compiled kernels release the GIL so threads
+# actually parallelize. 64 is fine on typical multi-core hosts.
+align_threads = 64
+# Cross-PLM score model is aligner-specific — see `[aligners.*].score_model`
+# below. PLMAlign + pLM-BLAST pair with ProtT5; OTalign with Ankh-Large.
 
 # In-process rate limits. Cloudflare WAF is the first line externally.
 [ratelimit]
@@ -106,10 +184,16 @@ per_token_rpm = 120
 [cors]
 allow_origins = ["http://localhost:*", "https://colab.research.google.com"]
 allow_credentials = false
+allow_methods = ["GET", "POST", "DELETE", "OPTIONS"]
+allow_headers = ["Authorization", "Content-Type", "X-Request-ID"]
 
 [api]
 v1_sunset_date = "2026-12-31"
 openapi_public = true
+# Default TTL (seconds) applied when POST /admin/tokens omits `expires_at`.
+# 90 days. Callers may pass `expires_at = 0` to opt out and mint a
+# non-expiring token explicitly (not recommended for public use).
+default_token_ttl_s = 7776000
 
 [logging]
 level = "INFO"
