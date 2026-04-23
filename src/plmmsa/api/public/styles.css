@@ -194,6 +194,14 @@ pre {
   font-size: 0.78rem;
 }
 
+.static-msa-viewer:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+}
+
 .static-msa-controls {
   display: flex;
   align-items: center;
@@ -209,12 +217,36 @@ pre {
   overflow: auto;
 }
 
+.static-msa-viewer:fullscreen .static-msa-table {
+  max-height: calc(100vh - 2.75rem);
+}
+
 .msa-page-btn {
   min-width: 2rem;
   padding: 0.2rem 0.45rem;
   color: var(--fg);
   background: #fff;
   border-color: var(--border);
+}
+
+.msa-fullscreen-btn {
+  margin-left: auto;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  background: #fff;
+  border-color: var(--border);
+  line-height: 1;
+  text-align: center;
+}
+
+.msa-fullscreen-btn svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 .msa-page-btn:disabled {

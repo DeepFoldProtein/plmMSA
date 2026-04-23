@@ -86,6 +86,8 @@ console.log("plmMSA UI: app.js loaded");
   const versionEl = $("version");
 
   let currentJobId = null;
+  let renderedMsaJobId = null;
+  let renderedMsaPayload = null;
 
   /* --- URL query-param state --- */
 
@@ -343,8 +345,17 @@ console.log("plmMSA UI: app.js loaded");
 
       if (a3m) {
         const container = document.getElementById("msa-viewer-container");
-        const seqs = parseA3mForViewer(a3m);
-        renderMsaViewer(container, seqs);
+        if (renderedMsaJobId !== currentJobId || renderedMsaPayload !== a3m) {
+          const seqs = parseA3mForViewer(a3m);
+          renderMsaViewer(container, seqs);
+          renderedMsaJobId = currentJobId;
+          renderedMsaPayload = a3m;
+        }
+      } else {
+        const container = document.getElementById("msa-viewer-container");
+        if (container) container.innerHTML = "";
+        renderedMsaJobId = currentJobId;
+        renderedMsaPayload = "";
       }
 
       resultA3m.textContent = preview || "(no A3M yet)";
@@ -405,9 +416,16 @@ console.log("plmMSA UI: app.js loaded");
     nextBtn.type = "button";
     nextBtn.className = "msa-page-btn";
     nextBtn.textContent = ">";
+    const fullBtn = document.createElement("button");
+    fullBtn.type = "button";
+    fullBtn.className = "msa-fullscreen-btn";
+    fullBtn.title = "Full screen";
+    fullBtn.setAttribute("aria-label", "Full screen");
+    setFullscreenButtonIcon(fullBtn, false);
     controls.appendChild(prevBtn);
     controls.appendChild(pageLabel);
     controls.appendChild(nextBtn);
+    controls.appendChild(fullBtn);
 
     const table = document.createElement("div");
     table.className = "static-msa-table";
@@ -444,8 +462,29 @@ console.log("plmMSA UI: app.js loaded");
         drawPage();
       }
     });
+    fullBtn.addEventListener("click", () => toggleMsaFullscreen(wrapper));
+    document.addEventListener("fullscreenchange", () => {
+      const isFullScreen = document.fullscreenElement === wrapper;
+      fullBtn.title = isFullScreen ? "Exit full screen" : "Full screen";
+      fullBtn.setAttribute("aria-label", fullBtn.title);
+      setFullscreenButtonIcon(fullBtn, isFullScreen);
+    });
 
     drawPage();
+  }
+
+  async function toggleMsaFullscreen(wrapper) {
+    if (document.fullscreenElement === wrapper) {
+      await document.exitFullscreen();
+    } else if (wrapper.requestFullscreen) {
+      await wrapper.requestFullscreen();
+    }
+  }
+
+  function setFullscreenButtonIcon(button, isFullScreen) {
+    button.innerHTML = isFullScreen
+      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5V3h2M11 3h2v2M13 11v2h-2M5 13H3v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
+      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
   }
 
   function renderMsaRow(parent, seq, extraClass = "") {
