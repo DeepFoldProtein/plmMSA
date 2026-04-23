@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import torch
-from transformers import AutoTokenizer, T5EncoderModel
+from transformers import AutoTokenizer  # , T5EncoderModel
+from turbot5 import T5EncoderForMaskedLM
 
 from plmmsa.plm.base import PLM
 
@@ -31,12 +32,11 @@ class ProtT5(PLM):
         # `legacy=True` pins the pre-v4.33 T5 tokenization behavior and
         # silences the transformers deprecation warning.
         self.tokenizer = AutoTokenizer.from_pretrained(
-            hf_id, do_lower_case=False, use_fast=False, legacy=True,
+            hf_id, do_lower_case=False, use_fast=False, legacy=True
         )
-        model = T5EncoderModel.from_pretrained(hf_id)
-        self.model = model.to(self.device)  # pyright: ignore[reportArgumentType]
-        if dtype != torch.float32:
-            self.model = self.model.to(dtype)  # pyright: ignore[reportArgumentType]
+        with torch.cuda.device(self.device):
+            model = T5EncoderForMaskedLM.from_pretrained(hf_id, attention_type="flash")
+            self.model = model.to("cuda", dtype=self.dtype)  # pyright: ignore[reportArgumentType]
         self.model.eval()
         self.dim = int(self.model.config.d_model)
 
@@ -46,32 +46,45 @@ class ProtT5(PLM):
 
     @torch.inference_mode()
     def encode(self, sequences: Sequence[str]) -> list[torch.Tensor]:
-        seqs = list(sequences)
-        if not seqs:
+        if isinstance(sequences, str):
+            sequences = [sequences]
+        if not sequences:
             return []
+        sequences = list(map(self._format, sequences))
 
-        formatted = [self._format(s) for s in seqs]
-        enc = self.tokenizer(
-            formatted,
-            truncation=False,
-            padding=True,
-            return_tensors="pt",
-        ).to(self.device)
-        out = self.model(
-            input_ids=enc["input_ids"],
-            attention_mask=enc["attention_mask"],
-        )
-        per_token = out.last_hidden_state
-        mask = enc["attention_mask"].bool()
+        with torch.cuda.device(self.device):
+            inputs = self.tokenizer(
+                sequences,
+                truncation=False,
+                padding=True,
+                return_tensors="pt",
+                return_special_tokens_mask=True,
+            ).to(self.device)
+            out = self.model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+            )
+
+        if out.last_hidden_state.ndim != 3:
+            raise ValueError(f"last_hidden_state.ndim ({out.last_hidden_state.ndim}) != 3")
 
         results: list[torch.Tensor] = []
-        for seq, tokens, m in zip(seqs, per_token, mask, strict=True):
-            token_count = int(m.sum().item())
-            residues = tokens[: token_count - 1].detach().cpu()
-            if residues.shape[0] != len(seq):
+        for seq, emb, attn_mask, special_mask in zip(
+            sequences,
+            out.last_hidden_state,
+            inputs["attention_mask"],
+            inputs["special_tokens_mask"],
+            strict=True,
+        ):
+            is_not_special = special_mask == 0
+            is_not_pad = attn_mask == 1
+            final_mask = is_not_special & is_not_pad
+            residue_embeddings = emb[final_mask,:].detach().cpu()
+            mask_len = final_mask.sum().item()
+            if mask_len != len(seq.replace(" ", "")):
                 raise ValueError(
-                    f"token/residue length mismatch for ProtT5: seq_len={len(seq)}, "
-                    f"got {residues.shape[0]} residue tokens"
+                    f"token/residue length mismatch: seq_len={len(seq)} != {mask_len}, "
+                    f"but shape: {tuple(residue_embeddings.shape)}"
                 )
-            results.append(residues)
+            results.append(residue_embeddings)
         return results

@@ -101,30 +101,37 @@ def build_argparser() -> argparse.ArgumentParser:
     desc = (__doc__ or "").splitlines()[0]
     ap = argparse.ArgumentParser(description=desc)
     ap.add_argument(
-        "--sqlite", required=True, type=Path,
-        help="Path to the ShardStore sqlite index (e.g. "
-             "/gpfs/.../uniref50_t5/datasets/index.db).",
+        "--sqlite",
+        required=True,
+        type=Path,
+        help="Path to the ShardStore sqlite index (e.g. /gpfs/.../uniref50_t5/datasets/index.db).",
     )
     ap.add_argument(
-        "--redis-url", required=True,
+        "--redis-url",
+        required=True,
         help="Target Redis URL (e.g. redis://cache-seq:6379/0).",
     )
     ap.add_argument(
-        "--model", default="prott5",
+        "--model",
+        default="prott5",
         help="Model id — shapes the key prefix `shard:<model>:`.",
     )
     ap.add_argument(
-        "--key-prefix", default="",
+        "--key-prefix",
+        default="",
         help="Override the full key prefix (default `shard:<model>:`). "
-             "Set this only if you're mirroring a custom layout.",
+        "Set this only if you're mirroring a custom layout.",
     )
     ap.add_argument(
-        "--batch", default=10_000, type=int,
+        "--batch",
+        default=10_000,
+        type=int,
         help="Pipeline batch size. 10k is a good balance; raise on a "
-             "local socket, lower over a slower link.",
+        "local socket, lower over a slower link.",
     )
     ap.add_argument(
-        "--log-level", default="INFO",
+        "--log-level",
+        default="INFO",
         help="Log level (DEBUG / INFO / WARNING).",
     )
     return ap

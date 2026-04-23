@@ -30,9 +30,7 @@ def _build_index(db_path: Path, rows: list[tuple[str, str]]) -> None:
         conn.execute(
             "CREATE TABLE files (id INTEGER PRIMARY KEY, folder_name TEXT, file_path TEXT)"
         )
-        conn.executemany(
-            "INSERT INTO files (folder_name, file_path) VALUES (?, ?)", rows
-        )
+        conn.executemany("INSERT INTO files (folder_name, file_path) VALUES (?, ?)", rows)
         conn.commit()
     finally:
         conn.close()
@@ -61,7 +59,9 @@ def shard_root(tmp_path: Path) -> Path:
 
 def test_index_hit(shard_root: Path) -> None:
     store = ShardStore(
-        shard_root, fallback_dirs=("missing_embeddings",), dim=4,
+        shard_root,
+        fallback_dirs=("missing_embeddings",),
+        dim=4,
     )
     found, missing = store.fetch(["UniRef50_A", "UniRef50_B"])
     assert sorted(found.keys()) == ["UniRef50_A", "UniRef50_B"]
@@ -72,7 +72,9 @@ def test_index_hit(shard_root: Path) -> None:
 
 def test_fallback_dir_hit(shard_root: Path) -> None:
     store = ShardStore(
-        shard_root, fallback_dirs=("missing_embeddings",), dim=4,
+        shard_root,
+        fallback_dirs=("missing_embeddings",),
+        dim=4,
     )
     found, missing = store.fetch(["UniRef50_C"])
     assert "UniRef50_C" in found
@@ -82,7 +84,9 @@ def test_fallback_dir_hit(shard_root: Path) -> None:
 
 def test_fragment_variant_resolves_to_highest(shard_root: Path) -> None:
     store = ShardStore(
-        shard_root, fallback_dirs=("missing_embeddings",), dim=4,
+        shard_root,
+        fallback_dirs=("missing_embeddings",),
+        dim=4,
     )
     found, missing = store.fetch(["UniRef50_D"])
     assert "UniRef50_D" in found
@@ -93,7 +97,9 @@ def test_fragment_variant_resolves_to_highest(shard_root: Path) -> None:
 
 def test_stale_index_row_degrades_to_miss(shard_root: Path) -> None:
     store = ShardStore(
-        shard_root, fallback_dirs=("missing_embeddings",), dim=4,
+        shard_root,
+        fallback_dirs=("missing_embeddings",),
+        dim=4,
     )
     found, missing = store.fetch(["UniRef50_STALE"])
     assert missing == ["UniRef50_STALE"]
@@ -102,7 +108,9 @@ def test_stale_index_row_degrades_to_miss(shard_root: Path) -> None:
 
 def test_unknown_id_is_miss(shard_root: Path) -> None:
     store = ShardStore(
-        shard_root, fallback_dirs=("missing_embeddings",), dim=4,
+        shard_root,
+        fallback_dirs=("missing_embeddings",),
+        dim=4,
     )
     found, missing = store.fetch(["UniRef50_UNKNOWN"])
     assert missing == ["UniRef50_UNKNOWN"]
@@ -128,7 +136,9 @@ def test_missing_root_returns_all_misses(tmp_path: Path) -> None:
 
 def test_preserves_np_float32(shard_root: Path) -> None:
     store = ShardStore(
-        shard_root, fallback_dirs=("missing_embeddings",), dim=4,
+        shard_root,
+        fallback_dirs=("missing_embeddings",),
+        dim=4,
     )
     found, _ = store.fetch(["UniRef50_A"])
     assert found["UniRef50_A"].dtype == np.float32

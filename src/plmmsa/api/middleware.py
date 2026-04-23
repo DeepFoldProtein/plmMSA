@@ -277,7 +277,9 @@ class RateLimitMiddleware:
                             token_limit = record.rate_limit_rpm
         if token_id is not None:
             allowed, retry = await _consume_rate_limit(
-                redis, key=f"token:{token_id}", limit=token_limit,
+                redis,
+                key=f"token:{token_id}",
+                limit=token_limit,
             )
             if not allowed:
                 await _send_error(
@@ -292,7 +294,9 @@ class RateLimitMiddleware:
             state["token_id"] = token_id
 
         allowed, retry = await _consume_rate_limit(
-            redis, key=f"ip:{ip}", limit=self.per_ip_rpm,
+            redis,
+            key=f"ip:{ip}",
+            limit=self.per_ip_rpm,
         )
         if not allowed:
             await _send_error(
@@ -315,10 +319,29 @@ class JSONLogFormatter(logging.Formatter):
     """
 
     _STD_FIELDS: ClassVar[set[str]] = {
-        "args", "asctime", "created", "exc_info", "exc_text", "filename",
-        "funcName", "levelname", "levelno", "lineno", "message", "module",
-        "msecs", "msg", "name", "pathname", "process", "processName",
-        "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        "taskName",
     }
 
     def format(self, record: logging.LogRecord) -> str:
@@ -350,9 +373,7 @@ def configure_logging(*, level: str = "INFO", json_format: bool = True) -> None:
     if json_format:
         handler.setFormatter(JSONLogFormatter())
     else:
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     root.addHandler(handler)
     root.setLevel(level.upper())
 

@@ -108,9 +108,7 @@ class PlmBlast(MatrixAligner):
         query = np.asarray(query_embedding, dtype=np.float32)
         targets = [np.asarray(t, dtype=np.float32) for t in target_embeddings]
         sim_matrices = builder.build(query, targets)
-        return [
-            self.align_matrix(sim, mode=mode, **kwargs) for sim in sim_matrices
-        ]
+        return [self.align_matrix(sim, mode=mode, **kwargs) for sim in sim_matrices]
 
     # Tunables — all overridable per-request via the aligner options.
     DEFAULT_GAP_PENALTY = 0.0
@@ -144,9 +142,12 @@ class PlmBlast(MatrixAligner):
             # No significant spans. Return an empty alignment; the caller
             # can filter hits by `score > 0` or `length > 0`.
             return Alignment(
-                score=0.0, mode=mode,
-                query_start=0, query_end=0,
-                target_start=0, target_end=0,
+                score=0.0,
+                mode=mode,
+                query_start=0,
+                query_end=0,
+                target_start=0,
+                target_end=0,
             )
         best = spans[0]  # sorted desc by score
         return Alignment(
@@ -227,7 +228,11 @@ class PlmBlast(MatrixAligner):
             if len(path) < min_span:
                 continue
             for span in _extract_spans(
-                path, sim, window=window_size, cutoff=cutoff, min_span=min_span,
+                path,
+                sim,
+                window=window_size,
+                cutoff=cutoff,
+                min_span=min_span,
             ):
                 key = (span.qi_start, span.ti_start)
                 prior = best_by_start.get(key)
@@ -265,7 +270,9 @@ def _fill_dp(
 
 @numba.njit(
     "float32[:, ::1](float32[:, ::1], float32, int32)",
-    cache=True, nogil=True, fastmath=True,
+    cache=True,
+    nogil=True,
+    fastmath=True,
 )
 def _fill_dp_jit(sim: np.ndarray, g: np.float32, is_local: int) -> np.ndarray:
     """JIT-compiled pLM-BLAST DP fill.

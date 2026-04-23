@@ -1,0 +1,223 @@
+/* plmMSA web UI — minimal, no framework. */
+
+:root {
+  --fg: #1a1a1a;
+  --fg-muted: #555;
+  --bg: #fafaf8;
+  --card: #fff;
+  --border: #d4d4d0;
+  --accent: #2a6f97;
+  --accent-fg: #fff;
+  --success: #2d7a46;
+  --error: #b13a3a;
+  --warn: #a07c15;
+  --font-mono: "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+header, main, footer {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+header {
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.75rem;
+}
+
+.tagline {
+  margin: 0.25rem 0 0;
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+}
+
+.tagline a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.tagline a:hover { text-decoration: underline; }
+
+section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+h2 {
+  margin: 0 0 1rem;
+  font-size: 1.15rem;
+}
+
+.hint {
+  font-weight: normal;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+  margin-left: 0.5rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+}
+
+label span {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+label.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: 1rem;
+}
+
+label.inline span { display: inline; margin: 0; color: var(--fg); }
+
+textarea, select, input[type="text"], input[type="number"] {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+}
+
+textarea {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.row label { flex: 1; min-width: 160px; margin-bottom: 0; }
+
+button, a#download-btn {
+  padding: 0.5rem 1rem;
+  font: inherit;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+
+button:hover, a#download-btn:hover { opacity: 0.9; }
+
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.secondary, #clear-btn, #copy-btn {
+  color: var(--fg);
+  background: transparent;
+  border-color: var(--border);
+}
+
+#jobs-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.75rem;
+}
+
+#jobs-list li {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+#jobs-list li.selected { border-color: var(--accent); background: #f4f9fc; }
+
+.job-id { font-family: var(--font-mono); font-size: 0.8rem; color: var(--fg-muted); }
+
+.status-pill {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.status-queued, .status-running { background: #ecebe2; color: var(--warn); }
+.status-succeeded { background: #e3f2e8; color: var(--success); }
+.status-failed, .status-cancelled { background: #fae0e0; color: var(--error); }
+
+pre {
+  background: #f5f3ed;
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  max-height: 24rem;
+  margin: 0;
+}
+
+/* MSA viewer styles rolled back — raw A3M preview is the only view now. */
+
+details { margin-bottom: 0.75rem; }
+
+details summary {
+  cursor: pointer;
+  font-weight: 500;
+  margin-bottom: 0.35rem;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+
+footer code {
+  background: #ecebe2;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+
+footer .cf-urls {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+}
+
+footer .cf-urls li {
+  margin: 0.15rem 0;
+}
+
+footer .cf-urls code {
+  font-size: 0.82rem;
+  user-select: all;
+}

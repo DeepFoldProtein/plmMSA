@@ -103,6 +103,50 @@ def _maybe_register_gpu_builders(settings: Any) -> None:
         )
 
 
+def _warmup_fused_sinkhorn(settings: Any) -> None:
+    """One-shot call through `unbalanced_sinkhorn_flash` so torch.compile
+    pays the graph-build cost at startup, not on the first real job.
+
+    Skipped when OTalign's `fused_sinkhorn` is off, when torch isn't
+    available, or when no CUDA device is visible (the flash path falls
+    back to eager on CPU anyway).
+    """
+    cfg = getattr(settings.aligners, "otalign", None)
+    if cfg is None or not getattr(cfg, "fused_sinkhorn", False):
+        return
+    try:
+        import numpy as np
+        import torch
+
+        if not torch.cuda.is_available():
+            logger.info("align: fused_sinkhorn requested but CUDA unavailable — skipping warmup")
+            return
+
+        from plmmsa.align.sinkhorn_flash import unbalanced_sinkhorn_flash
+
+        # Matrix size is representative of the CASP15 target distribution;
+        # torch.compile with dynamic=True reuses this graph for other
+        # shapes in the same rank family.
+        device = cfg.device or "cuda:0"
+        c = torch.randn(96, 256, dtype=torch.float32, device=device)
+        unbalanced_sinkhorn_flash(
+            c,
+            eps=0.1,
+            tau=1.0,
+            n_iter=100,
+            tol=1e-4,
+        )
+        _ = np  # keep numpy import side-effect free
+        logger.info(
+            "align: FlashSinkhorn warmup complete (device=%s)",
+            device,
+        )
+    except Exception:
+        logger.exception(
+            "align: FlashSinkhorn warmup failed — first real job will pay compile cost"
+        )
+
+
 def create_app(*, aligners_override: dict[str, Aligner] | None = None) -> FastAPI:
     """Factory for the align FastAPI app.
 
@@ -124,6 +168,7 @@ def create_app(*, aligners_override: dict[str, Aligner] | None = None) -> FastAP
         else load_enabled_aligners(settings)
     )
     logger.info("align server: aligners loaded = %s", sorted(aligners.keys()))
+    _warmup_fused_sinkhorn(settings)
 
     @app.exception_handler(PlmMSAError)
     async def _err(_: Request, exc: PlmMSAError) -> JSONResponse:
@@ -278,5 +323,9 @@ def _settings_defaults_for(aligner_id: str, settings: Any) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if cfg.device:
             out["device"] = cfg.device
+        # FlashSinkhorn opt-in lives in settings; the aligner picks it
+        # up through the `fused_sinkhorn` kwarg in align().
+        if cfg.fused_sinkhorn:
+            out["fused_sinkhorn"] = True
         return out
     return {}

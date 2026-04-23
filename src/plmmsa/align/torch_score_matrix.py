@@ -32,9 +32,7 @@ class TorchBuilder:
 
     def __init__(self, mode: str, device: str | None = None) -> None:
         if mode not in SCORE_MATRIX_CHOICES:
-            raise ValueError(
-                f"mode must be one of {SCORE_MATRIX_CHOICES}, got {mode!r}"
-            )
+            raise ValueError(f"mode must be one of {SCORE_MATRIX_CHOICES}, got {mode!r}")
         import torch  # heavy import — gated behind construction
 
         self.id = mode  # same key as the numpy builder; one replaces the other

@@ -61,7 +61,7 @@ def _make_orchestrator(transport: httpx.MockTransport, fetcher) -> Orchestrator:
         embedding_url="http://embedding",
         vdb_url="http://vdb",
         align_url="http://align",
-            align_transport="json",
+        align_transport="json",
     )
 
     def client_factory() -> httpx.AsyncClient:

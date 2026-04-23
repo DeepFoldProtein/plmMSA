@@ -52,7 +52,8 @@ def _make_router(
             # `<model>_uniref50` by default).
             coll = body["collection"]
             match = next(
-                (m for m, spec in per_model.items() if spec["collection"] == coll), None,
+                (m for m, spec in per_model.items() if spec["collection"] == coll),
+                None,
             )
             assert match is not None, f"unexpected collection {coll}"
             return httpx.Response(
@@ -98,10 +99,24 @@ async def test_two_models_union_hits_keeping_best_score() -> None:
             "neighbors": [{"id": "T1", "distance": 0.1}, {"id": "T2", "distance": 0.2}],
             "target_embs": [[[11.0, 0.0]], [[11.0, 0.0]]],
             "alignments": [
-                {"score": 5.0, "mode": "local", "query_start": 0, "query_end": 1,
-                 "target_start": 0, "target_end": 1, "columns": [[0, 0]]},
-                {"score": 3.0, "mode": "local", "query_start": 0, "query_end": 1,
-                 "target_start": 0, "target_end": 1, "columns": [[0, 0]]},
+                {
+                    "score": 5.0,
+                    "mode": "local",
+                    "query_start": 0,
+                    "query_end": 1,
+                    "target_start": 0,
+                    "target_end": 1,
+                    "columns": [[0, 0]],
+                },
+                {
+                    "score": 3.0,
+                    "mode": "local",
+                    "query_start": 0,
+                    "query_end": 1,
+                    "target_start": 0,
+                    "target_end": 1,
+                    "columns": [[0, 0]],
+                },
             ],
         },
         "esm1b": {
@@ -111,10 +126,24 @@ async def test_two_models_union_hits_keeping_best_score() -> None:
             "neighbors": [{"id": "T1", "distance": 0.1}, {"id": "T3", "distance": 0.3}],
             "target_embs": [[[22.0, 0.0]], [[22.0, 0.0]]],
             "alignments": [
-                {"score": 7.0, "mode": "local", "query_start": 0, "query_end": 1,
-                 "target_start": 0, "target_end": 1, "columns": [[0, 0]]},
-                {"score": 2.0, "mode": "local", "query_start": 0, "query_end": 1,
-                 "target_start": 0, "target_end": 1, "columns": [[0, 0]]},
+                {
+                    "score": 7.0,
+                    "mode": "local",
+                    "query_start": 0,
+                    "query_end": 1,
+                    "target_start": 0,
+                    "target_end": 1,
+                    "columns": [[0, 0]],
+                },
+                {
+                    "score": 2.0,
+                    "mode": "local",
+                    "query_start": 0,
+                    "query_end": 1,
+                    "target_start": 0,
+                    "target_end": 1,
+                    "columns": [[0, 0]],
+                },
             ],
         },
     }
@@ -166,8 +195,15 @@ async def test_single_model_legacy_path_still_works() -> None:
             "neighbors": [{"id": "T1", "distance": 0.1}],
             "target_embs": [[[11.0, 0.0]]],
             "alignments": [
-                {"score": 5.0, "mode": "local", "query_start": 0, "query_end": 1,
-                 "target_start": 0, "target_end": 1, "columns": [[0, 0]]},
+                {
+                    "score": 5.0,
+                    "mode": "local",
+                    "query_start": 0,
+                    "query_end": 1,
+                    "target_start": 0,
+                    "target_end": 1,
+                    "columns": [[0, 0]],
+                },
             ],
         },
     }

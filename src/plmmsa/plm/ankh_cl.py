@@ -34,47 +34,52 @@ class AnkhCL(PLM):
         # normalization step that shifts residue-to-token alignment.
         # Silences the deprecation warning too.
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_id, legacy=True)
-        model = _AnkhCLBackbone.from_pretrained(
-            checkpoint,
-            freeze_base=True,
-            is_scratch=False,
-        )
-        self.model = model.to(self.device)  # pyright: ignore[reportArgumentType]
-        if dtype != torch.float32:
-            self.model = self.model.to(dtype)  # pyright: ignore[reportArgumentType]
+        with torch.cuda.device(self.device):
+            model = _AnkhCLBackbone.from_pretrained(checkpoint, attention_type="flash")
+            self.model = model.to("cuda", dtype=self.dtype)  # pyright: ignore[reportArgumentType]
         self.model.eval()
         self.dim = int(self.model.d_model)
 
     @torch.inference_mode()
     def encode(self, sequences: Sequence[str]) -> list[torch.Tensor]:
-        seqs = list(sequences)
-        if not seqs:
+        if isinstance(sequences, str):
+            sequences = [sequences]
+        if not sequences:
             return []
 
-        enc = self.tokenizer(
-            seqs,
-            truncation=False,
-            padding=True,
-            return_tensors="pt",
-        ).to(self.device)
-        out = self.model(
-            input_ids=enc["input_ids"],
-            attention_mask=enc["attention_mask"],
-        )
-        per_token = out.hidden_states  # [B, T, D]
-        mask = enc["attention_mask"].bool()
+        with torch.cuda.device(self.device):
+            inputs = self.tokenizer(
+                sequences,
+                truncation=False,
+                padding=True,
+                return_tensors="pt",
+                return_special_tokens_mask=True,
+            ).to(self.device)
+            out = self.model(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+            )
+
+        if out.last_hidden_state.ndim != 3:
+            raise ValueError(f"last_hidden_state.ndim ({out.last_hidden_state.ndim}) != 3")
 
         results: list[torch.Tensor] = []
-        for seq, tokens, m in zip(seqs, per_token, mask, strict=True):
-            token_count = int(m.sum().item())
-            # T5-family tokenizer appends one `</s>` token. Residue count =
-            # token_count - 1, and should match len(seq) for Ankh (single-
-            # residue tokenization of the amino-acid alphabet).
-            residues = tokens[: token_count - 1].detach().cpu()
-            if residues.shape[0] != len(seq):
+        for seq, emb, attn_mask, special_mask in zip(
+            sequences,
+            out.last_hidden_state,
+            inputs["attention_mask"],
+            inputs["special_tokens_mask"],
+            strict=True,
+        ):
+            is_not_special = special_mask == 0
+            is_not_pad = attn_mask == 1
+            final_mask = is_not_special & is_not_pad
+            residue_embeddings = emb[final_mask,:].detach().cpu()
+            mask_len = final_mask.sum().item()
+            if mask_len != len(seq):
                 raise ValueError(
-                    f"token/residue length mismatch: seq_len={len(seq)}, "
-                    f"got {residues.shape[0]} residue tokens"
+                    f"token/residue length mismatch: seq_len={len(seq)} != {mask_len}, "
+                    f"but shape: {tuple(residue_embeddings.shape)}"
                 )
-            results.append(residues)
+            results.append(residue_embeddings)
         return results

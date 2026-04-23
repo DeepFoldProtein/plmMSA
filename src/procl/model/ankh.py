@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import torch
 from torch import nn
-from transformers import T5Config, T5EncoderModel, T5PreTrainedModel
+
+# from transformers import T5Config, T5EncoderModel, T5PreTrainedModel
+from turbot5.heads.t5_heads import T5Config, T5EncoderForMaskedLM, T5PreTrainedModel
 
 from procl.model.head.convbert import ConvBertForHead
 from procl.model.output.cloutput import CLPredictionOutput
@@ -22,38 +24,22 @@ class AnkhCL(T5PreTrainedModel):
     load with `freeze_base=True, is_scratch=False` and take the head output.
     """
 
-    def __init__(self, config: T5Config, freeze_base: bool, is_scratch: bool) -> None:
+    def __init__(self, config: T5Config) -> None:
         super().__init__(config)
-        self.transformer = T5EncoderModel(config)
-        self.freeze_base = freeze_base
+        self.transformer = T5EncoderForMaskedLM(config)
         self.d_model = config.d_model
 
-        if freeze_base:
-            for p in self.transformer.parameters():
-                p.requires_grad = False
-
-        if not is_scratch:
-            self.head = ConvBertForHead(
-                input_dim=_HEAD_INPUT_DIM,
-                nhead=_HEAD_NUM_HEADS,
-                hidden_dim=_HEAD_HIDDEN_DIM,
-                num_hidden_layers=_HEAD_NUM_HIDDEN_LAYERS,
-                kernel_size=_HEAD_KERNEL_SIZE,
-                dropout=0.0,
-            )
-
-        self.activation = nn.Tanh()
-
-    def add_convbert_for_train(self, dropout: float) -> None:
-        """Attach a fresh ConvBert head for training (used when `is_scratch=True`)."""
+        # if not is_scratch:
         self.head = ConvBertForHead(
             input_dim=_HEAD_INPUT_DIM,
             nhead=_HEAD_NUM_HEADS,
             hidden_dim=_HEAD_HIDDEN_DIM,
             num_hidden_layers=_HEAD_NUM_HIDDEN_LAYERS,
             kernel_size=_HEAD_KERNEL_SIZE,
-            dropout=dropout,
+            dropout=0.0,
         )
+
+        self.activation = nn.Tanh()
 
     def _extract_hidden_state(
         self, tokens: torch.Tensor, attention_mask: torch.Tensor
@@ -80,6 +66,6 @@ class AnkhCL(T5PreTrainedModel):
         return CLPredictionOutput(
             loss=None,
             logits=None,
-            hidden_states=last_hidden_state,
+            last_hidden_state=last_hidden_state,
             attentions=None,
         )

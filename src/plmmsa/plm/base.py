@@ -23,10 +23,7 @@ def dtype_from_precision(precision: str) -> torch.dtype:
         "half": torch.float16,
     }
     if key not in mapping:
-        raise ValueError(
-            f"unsupported precision {precision!r}; "
-            f"expected one of {sorted(mapping)}"
-        )
+        raise ValueError(f"unsupported precision {precision!r}; expected one of {sorted(mapping)}")
     return mapping[key]
 
 

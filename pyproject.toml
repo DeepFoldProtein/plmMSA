@@ -23,6 +23,10 @@ dependencies = [
     # column/row-max gap recurrence in pLM-BLAST is ~100× slower than
     # upstream. Wheel is small; no CUDA dependency.
     "numba>=0.60",
+    # FastAPI pulls this in via the [standard] extra of uvicorn in
+    # prod, but our uv lockfile picks the bare fastapi. Declare
+    # explicitly so `/v2/colabfold/*` Form body parsing works.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +41,7 @@ embedding = [
     "huggingface-hub>=0.25",
     "sentencepiece>=0.2",
     "protobuf>=5.28",
+    "turbot5",
 ]
 vdb = [
     "faiss-cpu>=1.8",
@@ -64,6 +69,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/plmmsa", "src/procl"]
+# Ship the static web UI (HTML / CSS / JS) alongside the Python source.
+# Hatch treats non-.py files as package data only when we list them
+# explicitly here.
+[tool.hatch.build.targets.wheel.force-include]
+"src/plmmsa/api/public" = "plmmsa/api/public"
 
 [dependency-groups]
 dev = [
@@ -91,7 +101,11 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 "src/plmmsa/align/otalign_dp.py" = ["N803", "N806"]
 "src/plmmsa/align/sinkhorn.py" = ["N803", "N806"]
 "src/plmmsa/align/sinkhorn_torch.py" = ["N803", "N806"]
+"src/plmmsa/align/sinkhorn_flash.py" = ["N803", "N806"]
 "tests/test_align_plm_blast.py" = ["N806"]
+"tests/test_align_sinkhorn_flash.py" = ["N802", "N803", "N806"]
+# Micro-benchmark: same math-variable convention as src/plmmsa/align/.
+"bench/flash_sinkhorn.py" = ["N803", "N806"]
 
 [tool.pyright]
 include = ["src", "tests"]

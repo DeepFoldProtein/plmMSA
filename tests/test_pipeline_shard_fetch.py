@@ -34,10 +34,7 @@ def _handler(calls: list[dict[str, Any]]):
                 json={
                     "model": body["model"],
                     "dim": 2,
-                    "embeddings": [
-                        [[7.0, 7.0] for _ in range(len(s))]
-                        for s in body["sequences"]
-                    ],
+                    "embeddings": [[[7.0, 7.0] for _ in range(len(s))] for s in body["sequences"]],
                 },
             )
         if path == "/embed_by_id/bin":
@@ -71,11 +68,13 @@ def _handler(calls: list[dict[str, Any]]):
                 json={
                     "collection": body["collection"],
                     "k": body["k"],
-                    "results": [[
-                        {"id": "T1", "distance": 0.1},
-                        {"id": "T2", "distance": 0.2},
-                        {"id": "T3", "distance": 0.3},
-                    ]],
+                    "results": [
+                        [
+                            {"id": "T1", "distance": 0.1},
+                            {"id": "T2", "distance": 0.2},
+                            {"id": "T3", "distance": 0.3},
+                        ]
+                    ],
                 },
             )
         if path == "/align":
@@ -115,9 +114,7 @@ def _orch(shard_models: frozenset[str], calls: list[dict[str, Any]]) -> Orchestr
             shard_models=shard_models,
         ),
         DictTargetFetcher({"T1": "MK", "T2": "MK", "T3": "MK"}),
-        client_factory=lambda: httpx.AsyncClient(
-            transport=transport, base_url="http://stub"
-        ),
+        client_factory=lambda: httpx.AsyncClient(transport=transport, base_url="http://stub"),
     )
 
 

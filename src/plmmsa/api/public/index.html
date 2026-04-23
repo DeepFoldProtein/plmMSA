@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>plmMSA — submit a job</title>
+  <!-- Inline SVG favicon so the browser doesn't 404-spam /ui/favicon.ico. -->
+  <link rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <header>
+    <h1>plmMSA</h1>
+    <p class="tagline">
+      PLM-based MSA server. Submit a protein sequence → get back an A3M.
+      <a href="https://github.com/DeepFoldProtein/plmMSA" target="_blank" rel="noopener">Source</a> ·
+      <a href="/docs" target="_blank">API docs</a>
+    </p>
+  </header>
+
+  <main>
+    <section id="submit-section">
+      <h2>Submit a job</h2>
+      <form id="submit-form">
+        <label>
+          <span>Sequence (amino acids, or FASTA)</span>
+          <textarea id="seq" name="seq" rows="6" required placeholder="MKTIIAL...  ·  max 1022 residues"></textarea>
+        </label>
+        <div class="row">
+          <label>
+            <span>Aligner</span>
+            <select id="aligner" name="aligner">
+              <option value="plmalign" selected>PLMAlign (fast, ProtT5)</option>
+              <option value="otalign">OTalign (Sinkhorn, Ankh-Large)</option>
+            </select>
+          </label>
+          <label>
+            <span>Mode</span>
+            <select id="mode" name="mode">
+              <option value="local" selected>local</option>
+              <option value="global">global</option>
+              <option value="glocal" data-only="otalign">glocal (OTalign)</option>
+              <option value="q2t" data-only="otalign">q2t (OTalign)</option>
+              <option value="t2q" data-only="otalign">t2q (OTalign)</option>
+            </select>
+          </label>
+          <label>
+            <span>k (FAISS neighbors)</span>
+            <input id="k" name="k" type="number" min="1" max="10000" value="1000">
+          </label>
+        </div>
+        <div class="row">
+          <label class="inline">
+            <input id="filter_by_score" name="filter_by_score" type="checkbox" checked>
+            <span>Algorithm 1 step 5 filter (min(0.2·L, 8.0))</span>
+          </label>
+          <button type="submit" id="submit-btn">Submit</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="jobs-section">
+      <h2>
+        Jobs
+        <span class="hint">cached in your browser; share a job by copying the URL</span>
+      </h2>
+      <ul id="jobs-list"></ul>
+      <div class="row">
+        <button id="clear-btn" type="button">Clear cache</button>
+      </div>
+    </section>
+
+    <section id="result-section" hidden>
+      <h2>Result</h2>
+      <div id="result-meta"></div>
+      <details open>
+        <summary>MSA Viewer</summary>
+        <div id="msa-viewer-container"></div>
+      </details>
+      <details open>
+        <summary>Stats</summary>
+        <pre id="result-stats"></pre>
+      </details>
+      <details open>
+        <summary>A3M preview (first 80 rows)</summary>
+        <pre id="result-a3m"></pre>
+      </details>
+      <div class="row">
+        <a id="download-btn" type="button" download>Download A3M</a>
+        <button id="copy-btn" type="button">Copy URL</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      plmMSA · <span id="version">loading…</span>
+    </p>
+    <p>
+      ColabFold / Boltz / Protenix drop-in (copy either URL into
+      <code>--host-url</code> / <code>--msa_server_url</code>):
+    </p>
+    <ul class="cf-urls">
+      <li><code id="cf-url-plmmsa">/v2/colabfold/plmmsa</code></li>
+      <li><code id="cf-url-otalign">/v2/colabfold/otalign</code></li>
+    </ul>
+  </footer>
+
+  <script>
+    // Inline fallback: resolve the footer URLs against the current
+    // origin immediately, without waiting for app.js to run. If
+    // app.js errors for any reason (browser incompatibility, CSP, a
+    // bug in newly-shipped code), the footer still shows clickable
+    // copyable URLs. app.js overwrites these again on init; same
+    // string, no visible flicker.
+    (function () {
+      var origin = window.location.origin;
+      var a = document.getElementById("cf-url-plmmsa");
+      var b = document.getElementById("cf-url-otalign");
+      if (a) a.textContent = origin + "/v2/colabfold/plmmsa";
+      if (b) b.textContent = origin + "/v2/colabfold/otalign";
+    })();
+  </script>
+  <!-- <script src="//cdn.bio.sh/msa/latest/msa.min.gz.js"></script> -->
+  <script src="app.js" defer></script>
+</body>
+
+</html>

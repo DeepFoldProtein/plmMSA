@@ -19,7 +19,7 @@ from plmmsa.errors import ErrorCode, PlmMSAError
 from plmmsa.jobs import JobStore
 
 _IDEMPOTENCY_TTL_S = 600  # 10 min — long enough to de-dupe retries, short
-                          # enough that tuning a submission isn't blocked.
+# enough that tuning a submission isn't blocked.
 
 router = APIRouter(tags=["v2"])
 
@@ -143,11 +143,10 @@ def _default_models_with_vdb(settings: Any) -> list[str]:
     UniRef50 FAISS indexes, so they can't contribute hits and are excluded
     from the aggregate default.
     """
-    backends_with_vdb = {
-        c.model_backend for c in settings.vdb.collections.values() if c.enabled
-    }
+    backends_with_vdb = {c.model_backend for c in settings.vdb.collections.values() if c.enabled}
     return sorted(
-        name for name in _KNOWN_MODELS
+        name
+        for name in _KNOWN_MODELS
         if getattr(settings.models, name).enabled and name in backends_with_vdb
     )
 
@@ -195,7 +194,8 @@ def _resolve_score_model(req: SubmitRequest, settings: Any) -> str:
 
 
 def _resolve_collections_for_models(
-    resolved_models: list[str], settings: Any,
+    resolved_models: list[str],
+    settings: Any,
 ) -> dict[str, str]:
     """Look up each retrieval model's VDB collection by matching
     `vdb.collections.<name>.model_backend`. The orchestrator's old
@@ -277,9 +277,7 @@ def _validate_submit(req: SubmitRequest, settings: Any) -> tuple[list[str], str]
                 detail={"chain": idx, "invalid_chars": bad},
             )
 
-    enabled_models = {
-        name for name in _KNOWN_MODELS if getattr(settings.models, name).enabled
-    }
+    enabled_models = {name for name in _KNOWN_MODELS if getattr(settings.models, name).enabled}
     resolved = _resolve_models(req, settings)
     if not resolved:
         raise PlmMSAError(
@@ -400,10 +398,18 @@ async def submit_msa(req: SubmitRequest, request: Request) -> SubmitResponse:
     if prior is not None:
         prior_id = prior.decode("utf-8") if isinstance(prior, bytes) else prior
         prior_job = await store.get(prior_id)
-        if prior_job is not None:
+        # Only deduplicate against a prior that still has a chance of
+        # succeeding. If the prior failed or was cancelled, the caller
+        # almost certainly wants a fresh attempt (the failure may have
+        # been an infra blip, not a deterministic property of the
+        # request). Skip dedup in that case and fall through to
+        # creating a new job.
+        if prior_job is not None and prior_job.status.value not in ("failed", "cancelled"):
             audit_event(
                 "msa.submit.idempotent",
-                token_id=token_id, request_id=request_id, client_ip=client_ip,
+                token_id=token_id,
+                request_id=request_id,
+                client_ip=client_ip,
                 job_id=prior_id,
             )
             return SubmitResponse(
@@ -417,10 +423,14 @@ async def submit_msa(req: SubmitRequest, request: Request) -> SubmitResponse:
     await store.redis.set(idem_key, job.id, ex=_IDEMPOTENCY_TTL_S)  # pyright: ignore[reportGeneralTypeIssues]
     audit_event(
         "msa.submit",
-        token_id=token_id, request_id=request_id, client_ip=client_ip,
-        job_id=job.id, models=resolved_models,
+        token_id=token_id,
+        request_id=request_id,
+        client_ip=client_ip,
+        job_id=job.id,
+        models=resolved_models,
         score_model=resolved_score_model or None,
-        paired=req.paired, chain_count=len(req.sequences),
+        paired=req.paired,
+        chain_count=len(req.sequences),
     )
     return SubmitResponse(
         job_id=job.id,
@@ -465,7 +475,12 @@ async def cancel_msa(request: Request, job_id: str = Path(..., min_length=1)) ->
 
 
 async def _forward(
-    target: str, path: str, payload: dict, *, timeout: float = 120.0, service: str,
+    target: str,
+    path: str,
+    payload: dict,
+    *,
+    timeout: float = 120.0,
+    service: str,
     request: Request | None = None,
 ) -> JSONResponse:
     """Common httpx passthrough used by /v2/embed, /v2/search, /v2/align.
@@ -530,7 +545,11 @@ async def embed(req: EmbedRequest, request: Request) -> JSONResponse:
     """
     target = os.environ.get("EMBEDDING_URL", "http://embedding:8081")
     return await _forward(
-        target, "/embed", req.model_dump(), service="embedding", request=request,
+        target,
+        "/embed",
+        req.model_dump(),
+        service="embedding",
+        request=request,
     )
 
 
@@ -550,7 +569,11 @@ async def search(req: SearchRequest, request: Request) -> JSONResponse:
     """
     target = os.environ.get("VDB_URL", "http://vdb:8082")
     return await _forward(
-        target, "/search", req.model_dump(), service="vdb", request=request,
+        target,
+        "/search",
+        req.model_dump(),
+        service="vdb",
+        request=request,
     )
 
 
@@ -571,5 +594,9 @@ async def align(req: AlignRequest, request: Request) -> JSONResponse:
     """
     target = os.environ.get("ALIGN_URL", "http://align:8083")
     return await _forward(
-        target, "/align", req.model_dump(), service="align", request=request,
+        target,
+        "/align",
+        req.model_dump(),
+        service="align",
+        request=request,
     )

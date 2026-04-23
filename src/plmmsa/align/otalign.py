@@ -43,19 +43,23 @@ class OTalign(Aligner):
     # Sinkhorn defaults — operator-provided calibration.
     DEFAULT_EPS = 0.1
     DEFAULT_TAU = 1.0
-    DEFAULT_N_ITER = 100
-    DEFAULT_TOL = 1e-4
+    DEFAULT_N_ITER = 1250
+    DEFAULT_TOL = 1e-3
 
     # Gap-factor defaults — upstream conventions.
     DEFAULT_GO_BASE = 8.0
     DEFAULT_GE_BASE = 1.0
-    DEFAULT_GAMMA = 1.0       # exponent on mass-normalized factor
-    DEFAULT_ETA = 0.25        # lower bound on ge multiplier
-    DEFAULT_K_F = 0.75        # sigmoid sharpness on query-side dual var
-    DEFAULT_K_G = 0.75        # sigmoid sharpness on target-side dual var
+    DEFAULT_GAMMA = 1.0  # exponent on mass-normalized factor
+    DEFAULT_ETA = 0.25  # lower bound on ge multiplier
+    DEFAULT_K_F = 0.75  # sigmoid sharpness on query-side dual var
+    DEFAULT_K_G = 0.75  # sigmoid sharpness on target-side dual var
     DEFAULT_CLIP_LOWER = 0.25
     DEFAULT_CLIP_UPPER = 4.0
     DEFAULT_DP_MODE: DPMode = "glocal"
+    # FlashSinkhorn opt-in. False keeps the eager torch Sinkhorn
+    # (safest, no compile overhead). The align-service factory bumps
+    # this from settings.aligners.otalign.fused_sinkhorn at startup.
+    DEFAULT_FUSED_SINKHORN: bool = False
 
     def align(
         self,
@@ -86,6 +90,9 @@ class OTalign(Aligner):
         # Torch device override. `None` → auto-detect (GPU if available).
         # "" / "cpu" → force CPU. "cuda:0" etc → pin to that device.
         device: str | None = None,
+        # FlashSinkhorn opt-in per request. `None` → class default (set
+        # from settings at align-service startup).
+        fused_sinkhorn: bool | None = None,
         **_: Any,
     ) -> list[Alignment]:
         settings = _Hyperparams(
@@ -102,6 +109,7 @@ class OTalign(Aligner):
             clip_lower=_opt(clip_lower, self.DEFAULT_CLIP_LOWER),
             clip_upper=_opt(clip_upper, self.DEFAULT_CLIP_UPPER),
             dp_mode=_opt(dp_mode, _mode_to_dp(mode)),
+            fused=_opt(fused_sinkhorn, self.DEFAULT_FUSED_SINKHORN),
         )
         # Device resolution: explicit kwarg > auto-detect. When auto,
         # pick `cuda:0` if torch.cuda.is_available, else stay CPU. This
@@ -131,6 +139,7 @@ class _Hyperparams:
         "dp_mode",
         "eps",
         "eta",
+        "fused",
         "gamma",
         "ge_base",
         "go_base",
@@ -159,6 +168,9 @@ def _align_pair(q, t, hp: _Hyperparams) -> Alignment:
     way the DP runs on CPU numpy because the per-cell affine-gap loop
     is inherently sequential.
     """
+    len_q = q.shape[-2]
+    len_t = q.shape[-2]
+
     # Step 1 — cost matrix, bounded [0, 2]. Done in the native backend of
     # the inputs so we don't leave the GPU until the DP step below.
     C = _cost_matrix(q, t)
@@ -171,16 +183,27 @@ def _align_pair(q, t, hp: _Hyperparams) -> Alignment:
     # Step 3 — PMI match scores + per-residue gap factors.
     S = _pmi_from_plan(P)
     go_q, ge_q, go_t, ge_t = _gap_factors(
-        P, result.f, result.g,
-        go_base=hp.go_base, ge_base=hp.ge_base,
-        gamma=hp.gamma, eta=hp.eta,
-        k_f=hp.k_f, k_g=hp.k_g,
-        clip_lower=hp.clip_lower, clip_upper=hp.clip_upper,
+        P,
+        result.f,
+        result.g,
+        go_base=hp.go_base,
+        ge_base=hp.ge_base,
+        gamma=hp.gamma,
+        eta=hp.eta,
+        k_f=hp.k_f,
+        k_g=hp.k_g,
+        clip_lower=hp.clip_lower,
+        clip_upper=hp.clip_upper,
     )
 
     # Step 4 — DP.
     dp = affine_gap_dp(
-        S, go_q=go_q, ge_q=ge_q, go_t=go_t, ge_t=ge_t, mode=hp.dp_mode,
+        S,
+        go_q=go_q,
+        ge_q=ge_q,
+        go_t=go_t,
+        ge_t=ge_t,
+        mode=hp.dp_mode,
     )
 
     # Step 5 — headline score = sum of transport-plan mass at matched
@@ -191,7 +214,7 @@ def _align_pair(q, t, hp: _Hyperparams) -> Alignment:
     if matched:
         rows = np.asarray([qi for qi, _ in matched], dtype=np.int64)
         cols = np.asarray([ti for _, ti in matched], dtype=np.int64)
-        plan_sum = float(P[rows, cols].sum())
+        plan_sum = float(P[rows, cols].sum()) / min(len_q, len_t)
     else:
         plan_sum = 0.0
 
@@ -262,16 +285,26 @@ def _gap_factors(
     col_mass = P.sum(axis=0)  # (Lt,)
 
     go_q, ge_q = _gap_factors_one_side(
-        mass=row_mass, dual=f,
-        go_base=go_base, ge_base=ge_base,
-        gamma=gamma, eta=eta, k=k_f,
-        clip_lower=clip_lower, clip_upper=clip_upper,
+        mass=row_mass,
+        dual=f,
+        go_base=go_base,
+        ge_base=ge_base,
+        gamma=gamma,
+        eta=eta,
+        k=k_f,
+        clip_lower=clip_lower,
+        clip_upper=clip_upper,
     )
     go_t, ge_t = _gap_factors_one_side(
-        mass=col_mass, dual=g,
-        go_base=go_base, ge_base=ge_base,
-        gamma=gamma, eta=eta, k=k_g,
-        clip_lower=clip_lower, clip_upper=clip_upper,
+        mass=col_mass,
+        dual=g,
+        go_base=go_base,
+        ge_base=ge_base,
+        gamma=gamma,
+        eta=eta,
+        k=k_g,
+        clip_lower=clip_lower,
+        clip_upper=clip_upper,
     )
     return go_q, ge_q, go_t, ge_t
 
@@ -323,7 +356,7 @@ def _gap_factors_one_side(
 def _l2_normalize(x: np.ndarray) -> np.ndarray:
     arr = np.asarray(x, dtype=np.float32)
     norms = np.linalg.norm(arr, axis=-1, keepdims=True)
-    return arr / np.clip(norms, 1e-12, None)
+    return arr / np.clip(norms, 1e-6, None)
 
 
 def _keep_tensor_or_numpy(x):
@@ -404,8 +437,7 @@ def _l2_normalize_any(x):
     if _is_torch_tensor(x):
         import torch
 
-        norms = torch.linalg.norm(x, dim=-1, keepdim=True)
-        return x / torch.clamp(norms, min=1e-12)
+        return torch.nn.functional.normalize(x, p=2, dim=-1, eps=1e-6)
     return _l2_normalize(x)
 
 
@@ -425,15 +457,42 @@ def _cost_matrix(q, t):
 
 
 def _solve_sinkhorn(C, hp: _Hyperparams) -> SinkhornResult:
-    """Dispatch to the torch solver when C is a tensor, else numpy."""
+    """Dispatch to the right Sinkhorn implementation.
+
+    Order of preference:
+      1. FlashSinkhorn (torch.compile fused chunk) when `hp.fused`
+         is set AND C is on a CUDA device. CPU falls through to the
+         eager torch solver because compile overhead dwarfs the win
+         at our matrix sizes.
+      2. `unbalanced_sinkhorn_torch` when C is any torch tensor.
+      3. Pure-numpy `unbalanced_sinkhorn` otherwise.
+    """
     if _is_torch_tensor(C):
+        if hp.fused and C.device.type == "cuda":
+            from plmmsa.align.sinkhorn_flash import unbalanced_sinkhorn_flash
+
+            return unbalanced_sinkhorn_flash(
+                C,
+                eps=hp.eps,
+                tau=hp.tau,
+                n_iter=hp.n_iter,
+                tol=hp.tol,
+            )
         from plmmsa.align.sinkhorn_torch import unbalanced_sinkhorn_torch
 
         return unbalanced_sinkhorn_torch(
-            C, eps=hp.eps, tau=hp.tau, n_iter=hp.n_iter, tol=hp.tol,
+            C,
+            eps=hp.eps,
+            tau=hp.tau,
+            n_iter=hp.n_iter,
+            tol=hp.tol,
         )
     return unbalanced_sinkhorn(
-        C, eps=hp.eps, tau=hp.tau, n_iter=hp.n_iter, tol=hp.tol,
+        C,
+        eps=hp.eps,
+        tau=hp.tau,
+        n_iter=hp.n_iter,
+        tol=hp.tol,
     )
 
 
@@ -457,8 +516,7 @@ def _mode_to_dp(mode: AlignMode) -> DPMode:
     """
     if mode not in _VALID_DP_MODES:
         raise ValueError(
-            f"OTalign: unsupported mode {mode!r}; expected one of "
-            f"{sorted(_VALID_DP_MODES)}"
+            f"OTalign: unsupported mode {mode!r}; expected one of {sorted(_VALID_DP_MODES)}"
         )
     return mode  # type: ignore[return-value]
 

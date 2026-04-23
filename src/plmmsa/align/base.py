@@ -172,9 +172,7 @@ class MatrixAligner(Aligner):
         n = len(sim_matrices)
         pool_size = _resolve_pool_size()
         if n <= 1 or pool_size <= 1:
-            return [
-                self.align_matrix(sim, mode=mode, **kwargs) for sim in sim_matrices
-            ]
+            return [self.align_matrix(sim, mode=mode, **kwargs) for sim in sim_matrices]
         with ThreadPoolExecutor(max_workers=min(pool_size, n)) as ex:
             return list(
                 ex.map(

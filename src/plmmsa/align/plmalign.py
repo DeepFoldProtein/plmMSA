@@ -89,7 +89,9 @@ def _align_pair(
     # the JIT warmup cost.
     M, X, Y = _fill_matrices_jit(
         np.ascontiguousarray(sim, dtype=np.float32),
-        go, ge, int(np.int32(1 if mode == "local" else 0)),
+        go,
+        ge,
+        int(np.int32(1 if mode == "local" else 0)),
     )
 
     # Pick traceback start.
@@ -176,9 +178,14 @@ def _traceback(
 
 @numba.njit(
     numba.types.UniTuple(numba.float32[:, ::1], 3)(
-        numba.float32[:, ::1], numba.float32, numba.float32, numba.int32,
+        numba.float32[:, ::1],
+        numba.float32,
+        numba.float32,
+        numba.int32,
     ),
-    cache=True, nogil=True, fastmath=True,
+    cache=True,
+    nogil=True,
+    fastmath=True,
 )
 def _fill_matrices_jit(
     sim: np.ndarray,

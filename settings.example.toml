@@ -60,6 +60,10 @@ enabled = true
 # (0.2*L, 8.0) threshold zeroes every hit on this scale. Off until
 # an OTalign-specific calibration is dialed in.
 filter_enabled = false
+# FlashSinkhorn (torch.compile fused iteration chunks). ~3-5x faster
+# on CUDA at CASP15 matrix sizes. Adds ~3-10s startup warmup. Leave
+# off until cross-validated on the full regression fixture set.
+fused_sinkhorn = false
 # OTalign pairs with Ankh-Large by default (upstream convention).
 score_model = "ankh_large"
 # Torch device. Empty = auto (cuda if available, else cpu).
@@ -173,12 +177,16 @@ embed_chunk_size = 256
 # independently; JIT-compiled kernels release the GIL so threads
 # actually parallelize. 64 is fine on typical multi-core hosts.
 align_threads = 64
+# Paired-MSA retrieval multiplier. When `paired=true`, each chain
+# retrieves `paired_k = multiplier * effective_k` neighbors so taxonomy
+# filtering leaves a useful pool. 3x matches MMseqs2 PairAlign tuning.
+paired_k_multiplier = 3
 # Cross-PLM score model is aligner-specific — see `[aligners.*].score_model`
 # below. PLMAlign + pLM-BLAST pair with ProtT5; OTalign with Ankh-Large.
 
 # In-process rate limits. Cloudflare WAF is the first line externally.
 [ratelimit]
-per_ip_rpm = 30
+per_ip_rpm = 60
 per_token_rpm = 120
 
 [cors]

@@ -73,3 +73,52 @@ def assemble_a3m(
         lines.append(f">{hit.target_id}   {hit.score:.3f}")
         lines.append(render_hit(len(query_seq), hit))
     return "\n".join(lines) + "\n"
+
+
+def assemble_paired_a3m(
+    *,
+    query_ids: Sequence[str],
+    query_seqs: Sequence[str],
+    paired_rows: Sequence[tuple[str, Sequence[AlignmentHit], float]],
+) -> str:
+    """Assemble a paired A3M from per-chain queries + ranked paired rows.
+
+    `paired_rows[i]` is `(taxonomy_id, chain_hits, joint_score)`, where
+    `chain_hits[c]` is the chosen hit for chain `c` (same order as
+    `query_ids` / `query_seqs`). Each paired row emits one concatenated
+    A3M record: per-chain aligned slots separated by a gap run of length
+    `max(chain_lengths) // 10` (ColabFold's paired-A3M convention), so
+    downstream tools that split paired rows back into chains know where
+    the boundaries live.
+
+    The first record is the concatenated query with the same separator.
+    """
+    if len(query_ids) != len(query_seqs):
+        raise ValueError(f"paired A3M: {len(query_ids)} query_ids vs {len(query_seqs)} query_seqs")
+    if not query_seqs:
+        return ""
+
+    sep_len = max(len(s) for s in query_seqs) // 10
+    sep = "-" * sep_len
+
+    lines: list[str] = []
+    # Query row — id is `|`-joined so clients can recover per-chain ids.
+    joined_query_id = "|".join(query_ids)
+    # Self-score convention matches the unpaired A3M: sum of chain lengths.
+    self_score = float(sum(len(s) for s in query_seqs))
+    lines.append(f">{joined_query_id}   {self_score:.3f}")
+    lines.append(sep.join(query_seqs))
+
+    for tax_id, chain_hits, joint_score in paired_rows:
+        if len(chain_hits) != len(query_seqs):
+            raise ValueError(
+                f"paired A3M: row has {len(chain_hits)} hits, expected {len(query_seqs)}"
+            )
+        rendered = sep.join(
+            render_hit(len(qs), hit) for qs, hit in zip(query_seqs, chain_hits, strict=True)
+        )
+        # Header: taxonomy id + per-chain target ids (|-joined) + joint score.
+        chain_labels = "|".join(h.target_id for h in chain_hits)
+        lines.append(f">tax:{tax_id}|{chain_labels}   {joint_score:.3f}")
+        lines.append(rendered)
+    return "\n".join(lines) + "\n"

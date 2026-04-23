@@ -11,8 +11,9 @@ import httpx
 import numpy as np
 
 from plmmsa.jobs.models import JobResult
-from plmmsa.pipeline.a3m import AlignmentHit, assemble_a3m
+from plmmsa.pipeline.a3m import AlignmentHit, assemble_a3m, assemble_paired_a3m
 from plmmsa.pipeline.fetcher import TargetFetcher
+from plmmsa.pipeline.paired import join_by_taxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,23 @@ def _score_threshold(query_len: int) -> float:
     >= 40 aa this saturates at 8.0.
     """
     return min(0.2 * float(query_len), 8.0)
+
+
+def _columns_in_bounds(
+    columns: list[tuple[int, int]],
+    query_len: int,
+    target_len: int,
+) -> bool:
+    """True when every column's (qi, ti) is within its sequence.
+
+    Drops align responses that disagree with the cached target sequence's
+    length — typically a symptom of `cache-seq` + the PLM shard store
+    being populated from different UniRef50 snapshots. Rendering an
+    out-of-bounds hit crashes `render_hit`; a defensive filter here
+    lets the rest of the job proceed instead of taking the whole MSA
+    down.
+    """
+    return all(qi < query_len and ti < target_len for qi, ti in columns)
 
 
 @dataclass(slots=True)
@@ -83,6 +101,13 @@ class OrchestratorConfig:
     # settings.toml. Empty default keeps tests / non-API callers in
     # their pre-settings "no filter" behavior.
     filter_enabled_aligners: frozenset[str] = field(default_factory=frozenset)
+    # Paired-MSA retrieval multiplier. Per-chain retrieval uses
+    # `paired_k = multiplier * effective_k` so taxonomy-join filtering
+    # still yields a useful pool. 3x matches upstream MMseqs2 tuning.
+    paired_k_multiplier: int = 3
+    # Hard cap matching the API schema's `k` limit; paired retrieval
+    # respects this so operators stay in control of GPU load.
+    paired_k_cap: int = 10_000
 
 
 class Orchestrator:
@@ -110,18 +135,22 @@ class Orchestrator:
         if not sequences:
             raise ValueError("request.sequences is empty")
 
-        # Only the first chain is pipelined today. Paired / per-chain handling
-        # is a deferred PLAN.md item.
+        # Per-chain labels — the API stamps these; old-shape callers
+        # (bench scripts, tests) may still send `query_id` singular.
+        # Default to incrementing integer labels matching upstream's
+        # ColabFold convention ("101", "102", ...).
+        query_ids_raw = request.get("query_ids")
+        if query_ids_raw:
+            query_ids = [str(q) for q in query_ids_raw]
+        else:
+            singular = request.get("query_id")
+            if singular and len(sequences) == 1:
+                query_ids = [str(singular)]
+            else:
+                query_ids = [str(101 + i) for i in range(len(sequences))]
+
         query_seq = sequences[0]
-        # `query_ids` is the per-chain plural form stamped by the API.
-        # Fall back to legacy `query_id` for old-shape callers (bench,
-        # tests). The label used for chain-0 is always `query_ids[0]`.
-        query_ids = request.get("query_ids")
-        query_id = (
-            str(query_ids[0])
-            if query_ids
-            else str(request.get("query_id") or "101")
-        )
+        query_id = query_ids[0]
         aligner = str(request.get("aligner") or cfg.default_aligner)
         mode = str(request.get("mode") or cfg.default_mode)
         k = int(request.get("k") or cfg.default_k)
@@ -130,6 +159,7 @@ class Orchestrator:
         # Default on; callers can opt out with filter_by_score=False.
         filter_by_score_raw = request.get("filter_by_score", True)
         filter_by_score = bool(filter_by_score_raw) if filter_by_score_raw is not None else True
+        paired = bool(request.get("paired", False))
 
         # Resolve the effective model list. API edge normalizes this into
         # `request["models"]`; we keep the legacy `model` field as a fallback
@@ -159,6 +189,30 @@ class Orchestrator:
             score_model = str(request["score_model"])
         else:
             score_model = cfg.score_model
+
+        if paired and len(sequences) > 1:
+            # Paired requires cross-PLM scoring — without it the
+            # alignment step and taxonomy-join contract get fuzzy
+            # (per-chain hits need comparable scores). Fall back to
+            # the aligner's default score_model when caller didn't
+            # specify one.
+            if not score_model:
+                # Paired needs comparable per-chain scores. Default to
+                # ProtT5 since its shard store makes per-chain retrieval
+                # cheap; operators can still pin via settings.
+                score_model = cfg.score_model or "prott5"
+            return await self._run_paired(
+                query_seqs=[str(s) for s in sequences],
+                query_ids=query_ids,
+                retrieval_models=models,
+                resolve_collection=_resolve_collection,
+                score_model=score_model,
+                k=k,
+                aligner=aligner,
+                mode=mode,
+                options=options,
+                filter_by_score=filter_by_score,
+            )
 
         if score_model:
             return await self._run_cross_plm(
@@ -290,11 +344,12 @@ class Orchestrator:
                 )
 
             target_embs = await self._embed_targets(
-                http, model, target_seqs, ids=kept_ids,
+                http,
+                model,
+                target_seqs,
+                ids=kept_ids,
             )
-            alignments = await self._align(
-                http, aligner, mode, query_emb, target_embs, options
-            )
+            alignments = await self._align(http, aligner, mode, query_emb, target_embs, options)
         except Exception as exc:
             # A single model's failure should not nuke the whole request when
             # we're running multiple — record the error and let the union
@@ -310,15 +365,29 @@ class Orchestrator:
 
         score_by_id = {n["id"]: float(n.get("distance", 0.0)) for n in neighbors}
         hits: list[AlignmentHit] = []
+        dropped_oob = 0
         for idx, tid in enumerate(kept_ids):
             a = alignments[idx]
+            target_seq = target_seqs[idx]
+            columns = [(int(c[0]), int(c[1])) for c in a["columns"]]
+            if not _columns_in_bounds(columns, len(query_seq), len(target_seq)):
+                dropped_oob += 1
+                continue
             hits.append(
                 AlignmentHit(
                     target_id=tid,
                     score=float(a.get("score", score_by_id.get(tid, 0.0))),
-                    target_seq=target_seqs[idx],
-                    columns=[(int(c[0]), int(c[1])) for c in a["columns"]],
+                    target_seq=target_seq,
+                    columns=columns,
                 )
+            )
+        if dropped_oob:
+            logger.warning(
+                "orchestrator: dropped %d/%d hits for model=%s with "
+                "columns out of target-seq bounds (cache-seq / shard snapshot drift)",
+                dropped_oob,
+                len(kept_ids),
+                model,
             )
         return _PerModelResult(
             model=model,
@@ -341,12 +410,78 @@ class Orchestrator:
         options: dict[str, Any],
         filter_by_score: bool = True,
     ) -> JobResult:
-        """Upstream PLMAlign topology.
+        """Cross-PLM topology wrapper — computes per-query hits via
+        `_cross_plm_hits` then assembles the single-chain A3M. See that
+        method's docstring for the pipeline shape.
+        """
+        result = await self._cross_plm_hits(
+            query_seq=query_seq,
+            retrieval_models=retrieval_models,
+            resolve_collection=resolve_collection,
+            score_model=score_model,
+            k=k,
+            aligner=aligner,
+            mode=mode,
+            options=options,
+            filter_by_score=filter_by_score,
+        )
+        if not result.hits and not result.hits_fetched:
+            return _query_only_result(
+                query_id=query_id,
+                query_seq=query_seq,
+                query_self_score=float(len(query_seq)),
+                hits_found=result.hits_found,
+                hits_fetched=0,
+                models=retrieval_models,
+                per_model_stats=result.per_retrieval_stats,
+            )
+        a3m = assemble_a3m(
+            query_id=query_id,
+            query_seq=query_seq,
+            query_self_score=float(len(query_seq)),
+            hits=result.hits,
+        )
+        return JobResult(
+            format="a3m",
+            payload=a3m,
+            stats={
+                "pipeline": "orchestrator",
+                "topology": "cross_plm",
+                "depth": 1 + len(result.hits),
+                "hits_found": result.hits_found,
+                "hits_fetched": len(result.hits),
+                "hits_pre_filter": result.hits_pre_filter,
+                "hits_post_filter": len(result.hits),
+                "filter_by_score": filter_by_score,
+                "filter_applied": result.filter_applied,
+                "filter_threshold": result.filter_threshold,
+                "retrieval_models": retrieval_models,
+                "score_model": score_model,
+                "aligner": aligner,
+                "mode": mode,
+                "per_retrieval": result.per_retrieval_stats,
+            },
+        )
 
-        Parallel VDB searches with every retrieval model → union hit ids →
-        single re-embed pass with `score_model` → one alignment call → one
-        A3M. The retrieval embeddings are discarded; the score-model
-        embeddings drive the alignment.
+    async def _cross_plm_hits(
+        self,
+        *,
+        query_seq: str,
+        retrieval_models: list[str],
+        resolve_collection: Any,  # async (str) -> str
+        score_model: str,
+        k: int,
+        aligner: str,
+        mode: str,
+        options: dict[str, Any],
+        filter_by_score: bool,
+    ) -> _CrossPlmChainResult:
+        """Upstream PLMAlign topology — returns the post-filter hit list.
+
+        Parallel VDB searches across `retrieval_models` → union hit ids →
+        single re-embed pass with `score_model` → one alignment call.
+        No A3M assembly; callers (single-chain and paired) wrap the
+        returned hit list in their own renderer.
 
         Benefits vs. per-model-aggregate:
           - One alignment pass instead of N — cheaper and scores are
@@ -357,7 +492,7 @@ class Orchestrator:
 
         Cost:
           - One extra /embed call per retrieval model (for the query
-            residues). Amortizes over k hits so negligible at k=500.
+            residues). Amortizes over k hits so negligible at k>=500.
         """
         async with self._new_client() as http:
             # Phase 1 — parallel retrieval across VDBs. In parallel we
@@ -377,12 +512,8 @@ class Orchestrator:
                     logger.warning("retrieval model %s failed: %s", rm, exc)
                     return rm, collection, None, str(exc)[:200]
 
-            score_query_task = asyncio.create_task(
-                self._embed_query(http, score_model, query_seq)
-            )
-            retrievals = await asyncio.gather(
-                *(_retrieve(rm) for rm in retrieval_models)
-            )
+            score_query_task = asyncio.create_task(self._embed_query(http, score_model, query_seq))
+            retrievals = await asyncio.gather(*(_retrieve(rm) for rm in retrieval_models))
 
             # Phase 2 — union ids across VDBs. Order preserved by first
             # occurrence, keep best-distance-per-id for reference stats.
@@ -412,24 +543,21 @@ class Orchestrator:
                 score_query_task.cancel()
                 with contextlib.suppress(BaseException):
                     await score_query_task
-                return _query_only_result(
-                    query_id=query_id,
-                    query_seq=query_seq,
-                    query_self_score=float(len(query_seq)),
+                return _CrossPlmChainResult(
+                    hits=[],
                     hits_found=0,
                     hits_fetched=0,
-                    models=retrieval_models,
-                    per_model_stats=per_retrieval_stats,
+                    hits_pre_filter=0,
+                    filter_applied=False,
+                    filter_threshold=_score_threshold(len(query_seq)),
+                    per_retrieval_stats=per_retrieval_stats,
                 )
 
             # Phase 3 — fetch target sequences. Fetcher key format is
             # collection-agnostic on our deployment (`seq:UniRef50_{id}`);
             # pass the first retrieval collection for anyone who keys by it.
             first_collection = next(
-                iter(
-                    s["collection"] for s in per_retrieval_stats.values()
-                    if "collection" in s
-                ),
+                iter(s["collection"] for s in per_retrieval_stats.values() if "collection" in s),
                 f"{retrieval_models[0]}_uniref50",
             )
             fetched = await self._fetcher.fetch(first_collection, order)
@@ -440,14 +568,14 @@ class Orchestrator:
                 score_query_task.cancel()
                 with contextlib.suppress(BaseException):
                     await score_query_task
-                return _query_only_result(
-                    query_id=query_id,
-                    query_seq=query_seq,
-                    query_self_score=float(len(query_seq)),
+                return _CrossPlmChainResult(
+                    hits=[],
                     hits_found=len(order),
                     hits_fetched=0,
-                    models=retrieval_models,
-                    per_model_stats=per_retrieval_stats,
+                    hits_pre_filter=0,
+                    filter_applied=False,
+                    filter_threshold=_score_threshold(len(query_seq)),
+                    per_retrieval_stats=per_retrieval_stats,
                 )
 
             # Phase 4 — score-model embed pass. Query embed was kicked
@@ -455,7 +583,10 @@ class Orchestrator:
             # await it now. Target embeds prefer the shard store.
             score_query_emb = await score_query_task
             score_target_embs = await self._embed_targets(
-                http, score_model, target_seqs, ids=kept_ids,
+                http,
+                score_model,
+                target_seqs,
+                ids=kept_ids,
             )
 
             # Phase 5 — one alignment call.
@@ -464,15 +595,28 @@ class Orchestrator:
             )
 
         hits: list[AlignmentHit] = []
+        dropped_oob = 0
         for idx, tid in enumerate(kept_ids):
             a = alignments[idx]
+            target_seq = target_seqs[idx]
+            columns = [(int(c[0]), int(c[1])) for c in a["columns"]]
+            if not _columns_in_bounds(columns, len(query_seq), len(target_seq)):
+                dropped_oob += 1
+                continue
             hits.append(
                 AlignmentHit(
                     target_id=tid,
                     score=float(a.get("score", best_distance.get(tid, 0.0))),
-                    target_seq=target_seqs[idx],
-                    columns=[(int(c[0]), int(c[1])) for c in a["columns"]],
+                    target_seq=target_seq,
+                    columns=columns,
                 )
+            )
+        if dropped_oob:
+            logger.warning(
+                "orchestrator: cross-plm dropped %d/%d hits with "
+                "columns out of target-seq bounds (cache-seq / shard snapshot drift)",
+                dropped_oob,
+                len(kept_ids),
             )
         hits.sort(key=lambda h: h.score, reverse=True)
 
@@ -480,37 +624,129 @@ class Orchestrator:
         # via settings; per-request `filter_by_score` must also be true.
         hits_pre_filter = len(hits)
         filter_threshold = _score_threshold(len(query_seq))
-        filter_applied = (
-            filter_by_score and aligner in self._config.filter_enabled_aligners
-        )
+        filter_applied = filter_by_score and aligner in self._config.filter_enabled_aligners
         if filter_applied:
             hits = [h for h in hits if h.score >= filter_threshold]
 
-        a3m = assemble_a3m(
-            query_id=query_id,
-            query_seq=query_seq,
-            query_self_score=float(len(query_seq)),
+        return _CrossPlmChainResult(
             hits=hits,
+            hits_found=len(order),
+            hits_fetched=len(kept_ids),
+            hits_pre_filter=hits_pre_filter,
+            filter_applied=filter_applied,
+            filter_threshold=filter_threshold,
+            per_retrieval_stats=per_retrieval_stats,
         )
+
+    async def _run_paired(
+        self,
+        *,
+        query_seqs: list[str],
+        query_ids: list[str],
+        retrieval_models: list[str],
+        resolve_collection: Any,
+        score_model: str,
+        k: int,
+        aligner: str,
+        mode: str,
+        options: dict[str, Any],
+        filter_by_score: bool,
+    ) -> JobResult:
+        """Paired-MSA pipeline via MMseqs-style taxonomy join.
+
+        Per-chain retrieval runs in parallel with `paired_k = multiplier *
+        effective_k` so the taxonomy-intersection step still leaves a
+        useful pool per chain. Each chain's post-filter hits are then
+        joined on the NCBI taxonomy id resolved from
+        `tax:UniRef50_<acc>` (populated by `build_sequence_cache.py`).
+        Rows where every chain shares a taxonomy emit one paired A3M
+        record; the rest are dropped.
+
+        Chains with an empty hit list short-circuit to a query-only A3M
+        (the single-chain path already handles that for unpaired).
+        """
+        cfg = self._config
+        paired_k = min(cfg.paired_k_multiplier * k, cfg.paired_k_cap)
+
+        # Phase A — per-chain pipelines in parallel. Each chain sees its
+        # own `cross_plm_hits` run; the retrieval + scoring topology is
+        # identical to unpaired, only the per-chain `k` differs.
+        chain_results = await asyncio.gather(
+            *(
+                self._cross_plm_hits(
+                    query_seq=seq,
+                    retrieval_models=retrieval_models,
+                    resolve_collection=resolve_collection,
+                    score_model=score_model,
+                    k=paired_k,
+                    aligner=aligner,
+                    mode=mode,
+                    options=options,
+                    filter_by_score=filter_by_score,
+                )
+                for seq in query_seqs
+            )
+        )
+
+        # Phase B — taxonomy lookup per chain. The fetcher owns the
+        # `tax:*` keyspace; DictTargetFetcher returns {} by default so
+        # in-memory tests degrade to an empty join (zero paired rows),
+        # which the tests exercise explicitly.
+        per_chain_tax: list[dict[str, str]] = []
+        for cr in chain_results:
+            ids = [h.target_id for h in cr.hits]
+            per_chain_tax.append(await self._fetcher.fetch_taxonomy(ids))
+
+        # Phase C — MMseqs-style join. Returns paired rows sorted by
+        # joint score + bookkeeping counters for the stats block.
+        join = join_by_taxonomy(
+            [cr.hits for cr in chain_results],
+            per_chain_tax,
+        )
+
+        # Phase D — assemble. Paired A3M always emits at least the
+        # concatenated query even if no shared taxonomy survived.
+        rows = [(r.taxonomy_id, r.hits, r.joint_score) for r in join.rows]
+        a3m = assemble_paired_a3m(
+            query_ids=query_ids,
+            query_seqs=query_seqs,
+            paired_rows=rows,
+        )
+
+        per_chain_stats: list[dict[str, Any]] = []
+        for i, cr in enumerate(chain_results):
+            per_chain_stats.append(
+                {
+                    "chain_index": i,
+                    "hits_found": cr.hits_found,
+                    "hits_fetched": cr.hits_fetched,
+                    "hits_pre_filter": cr.hits_pre_filter,
+                    "hits_post_filter": len(cr.hits),
+                    "filter_applied": cr.filter_applied,
+                    "filter_threshold": cr.filter_threshold,
+                    "per_retrieval": cr.per_retrieval_stats,
+                    "tax_resolved": join.per_chain_with_tax[i],
+                    "taxonomies": join.taxonomies_per_chain[i],
+                }
+            )
+
         return JobResult(
             format="a3m",
             payload=a3m,
             stats={
                 "pipeline": "orchestrator",
-                "topology": "cross_plm",
-                "depth": 1 + len(hits),
-                "hits_found": len(order),
-                "hits_fetched": len(hits),
-                "hits_pre_filter": hits_pre_filter,
-                "hits_post_filter": len(hits),
-                "filter_by_score": filter_by_score,
-                "filter_applied": filter_applied,
-                "filter_threshold": filter_threshold,
+                "topology": "paired",
+                "depth": 1 + len(join.rows),
+                "paired_rows": len(join.rows),
+                "paired_taxonomies": join.shared_taxonomies,
+                "paired_k_multiplier": cfg.paired_k_multiplier,
+                "paired_k_effective": paired_k,
                 "retrieval_models": retrieval_models,
                 "score_model": score_model,
                 "aligner": aligner,
                 "mode": mode,
-                "per_retrieval": per_retrieval_stats,
+                "filter_by_score": filter_by_score,
+                "per_chain": per_chain_stats,
             },
         )
 
@@ -575,12 +811,15 @@ class Orchestrator:
                     resp.raise_for_status()
                     meta, tensors = _binary.decode_tensors(resp.content)
                     for rid, t in zip(
-                        meta.get("found_ids", []), tensors, strict=True,
+                        meta.get("found_ids", []),
+                        tensors,
+                        strict=True,
                     ):
                         found[rid] = t
             except Exception:
                 logger.warning(
-                    "shard lookup failed for model=%s; falling back to /embed", model,
+                    "shard lookup failed for model=%s; falling back to /embed",
+                    model,
                     exc_info=True,
                 )
                 found = {}
@@ -595,7 +834,9 @@ class Orchestrator:
             if hits:
                 logger.info(
                     "shard_store: %d/%d hits for model=%s (misses fall through to /embed)",
-                    len(hits), len(seqs), model,
+                    len(hits),
+                    len(seqs),
+                    model,
                 )
 
         # Fallback path: anything not yet resolved goes through /embed, in
@@ -726,6 +967,24 @@ class Orchestrator:
         )
         resp.raise_for_status()
         return resp.json()["alignments"]
+
+
+@dataclass(slots=True)
+class _CrossPlmChainResult:
+    """Cross-PLM topology output for one chain.
+
+    The single-chain wrapper (`_run_cross_plm`) turns this into a JobResult
+    + A3M; the paired wrapper (`_run_paired`) collects one per chain and
+    runs the taxonomy join over them.
+    """
+
+    hits: list[AlignmentHit]
+    hits_found: int  # unioned neighbor count across retrieval VDBs
+    hits_fetched: int  # target-sequence fetch survivors (pre-filter)
+    hits_pre_filter: int
+    filter_applied: bool
+    filter_threshold: float
+    per_retrieval_stats: dict[str, dict[str, Any]]
 
 
 @dataclass(slots=True)

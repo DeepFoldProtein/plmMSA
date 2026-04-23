@@ -139,7 +139,10 @@ def test_align_matrix_all_ranks_descending() -> None:
 
     aligner = PlmBlast()
     spans = aligner.align_matrix_all(
-        sim, min_span=4, window_size=3, sigma_factor=0.3,
+        sim,
+        min_span=4,
+        window_size=3,
+        sigma_factor=0.3,
     )
     assert len(spans) >= 1
     scores = [s.score for s in spans]
@@ -155,7 +158,12 @@ def test_align_composes_builder_plus_matrix() -> None:
     t2 = np.random.default_rng(0).normal(size=(10, 4)).astype(np.float32)
 
     results = aligner.align(
-        q, [t1, t2], score_matrix="cosine", min_span=3, window_size=3, sigma_factor=0.3,
+        q,
+        [t1, t2],
+        score_matrix="cosine",
+        min_span=3,
+        window_size=3,
+        sigma_factor=0.3,
     )
     assert len(results) == 2
     # The identical target should score strictly higher than random noise.

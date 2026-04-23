@@ -38,10 +38,7 @@ def _handler(calls: list[dict[str, Any]], shard_ids: set[str]):
                 json={
                     "model": body["model"],
                     "dim": 2,
-                    "embeddings": [
-                        [[1.0, 0.0] for _ in range(len(s))]
-                        for s in body["sequences"]
-                    ],
+                    "embeddings": [[[1.0, 0.0] for _ in range(len(s))] for s in body["sequences"]],
                 },
             )
         if path == "/embed_by_id/bin":
@@ -120,11 +117,13 @@ def _orch(
     transport = httpx.MockTransport(_handler(calls, shard_ids))
     # Distinct target sequences so the test can distinguish target-embed
     # calls from query-embed calls (query sequence is "MK" in callers).
-    fetcher = DictTargetFetcher({
-        "T_shared": "MKT",
-        "T_ankh_only": "MKTV",
-        "T_esm_only": "MKTVL",
-    })
+    fetcher = DictTargetFetcher(
+        {
+            "T_shared": "MKT",
+            "T_ankh_only": "MKTV",
+            "T_esm_only": "MKTVL",
+        }
+    )
     return Orchestrator(
         OrchestratorConfig(
             embedding_url="http://embedding",
@@ -135,9 +134,7 @@ def _orch(
             shard_models=shard_models,
         ),
         fetcher,
-        client_factory=lambda: httpx.AsyncClient(
-            transport=transport, base_url="http://stub"
-        ),
+        client_factory=lambda: httpx.AsyncClient(transport=transport, base_url="http://stub"),
     )
 
 
@@ -153,9 +150,7 @@ async def test_cross_plm_runs_parallel_retrieval_then_single_align() -> None:
     """
     calls: list[dict[str, Any]] = []
     orch = _orch("prott5", shard_models=frozenset(), calls=calls)
-    result = await orch.run(
-        {"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3}
-    )
+    result = await orch.run({"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3})
 
     # Count + shape of calls per kind.
     search_calls = [c for c in calls if c["path"] == "/search"]
@@ -169,9 +164,7 @@ async def test_cross_plm_runs_parallel_retrieval_then_single_align() -> None:
     assert len(embed_calls) == 4
 
     # Query embeds go through the retrieval models.
-    retrieval_query_embeds = [
-        c for c in embed_calls if c["body"]["sequences"] == ["MK"]
-    ]
+    retrieval_query_embeds = [c for c in embed_calls if c["body"]["sequences"] == ["MK"]]
     retrieval_models_seen = {c["body"]["model"] for c in retrieval_query_embeds}
     assert {"ankh_cl", "esm1b", "prott5"} == retrieval_models_seen
 
@@ -198,9 +191,7 @@ async def test_cross_plm_uses_shard_store_when_configured() -> None:
         calls=calls,
         shard_ids={"T_shared", "T_ankh_only"},
     )
-    await orch.run(
-        {"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3}
-    )
+    await orch.run({"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3})
 
     paths = [c["path"] for c in calls]
     assert "/embed_by_id/bin" in paths
@@ -208,7 +199,8 @@ async def test_cross_plm_uses_shard_store_when_configured() -> None:
     # The miss-fallback /embed for targets should carry exactly one seq
     # (T_esm_only's sequence).
     target_embed_fallback = [
-        c for c in calls
+        c
+        for c in calls
         if c["path"] == "/embed"
         and c["body"]["model"] == "prott5"
         and c["body"]["sequences"] != ["MK"]
@@ -244,13 +236,9 @@ async def test_cross_plm_tolerates_one_vdb_failure() -> None:
             score_model="prott5",
         ),
         DictTargetFetcher({"T_shared": "MK", "T_esm_only": "MK"}),
-        client_factory=lambda: httpx.AsyncClient(
-            transport=transport, base_url="http://stub"
-        ),
+        client_factory=lambda: httpx.AsyncClient(transport=transport, base_url="http://stub"),
     )
-    result = await orch.run(
-        {"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3}
-    )
+    result = await orch.run({"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3})
     # Still succeeds — esm1b hits came through.
     assert result.stats["topology"] == "cross_plm"
     assert result.stats["per_retrieval"]["ankh_cl"].get("error") is not None
@@ -262,9 +250,7 @@ async def test_score_model_empty_falls_back_to_per_model_path() -> None:
     No cross-PLM topology, one alignment per retrieval model."""
     calls: list[dict[str, Any]] = []
     orch = _orch("", shard_models=frozenset(), calls=calls)
-    result = await orch.run(
-        {"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3}
-    )
+    result = await orch.run({"sequences": ["MK"], "models": ["ankh_cl", "esm1b"], "k": 3})
     assert result.stats.get("topology") != "cross_plm"
     # Two align calls (one per retrieval model).
     assert sum(1 for c in calls if c["path"] == "/align") == 2

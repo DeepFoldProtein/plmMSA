@@ -51,17 +51,19 @@ _Y = 2
 
 @numba.njit(
     numba.void(
-        numba.float32[:, ::1],   # S
-        numba.float32[::1],      # go_q
-        numba.float32[::1],      # ge_q
-        numba.float32[::1],      # go_t
-        numba.float32[::1],      # ge_t
-        numba.float32[:, ::1],   # M (in/out)
-        numba.float32[:, ::1],   # X (in/out)
-        numba.float32[:, ::1],   # Y (in/out)
-        numba.boolean,           # is_local
+        numba.float32[:, ::1],  # S
+        numba.float32[::1],  # go_q
+        numba.float32[::1],  # ge_q
+        numba.float32[::1],  # go_t
+        numba.float32[::1],  # ge_t
+        numba.float32[:, ::1],  # M (in/out)
+        numba.float32[:, ::1],  # X (in/out)
+        numba.float32[:, ::1],  # Y (in/out)
+        numba.boolean,  # is_local
     ),
-    cache=True, nogil=True, fastmath=True,
+    cache=True,
+    nogil=True,
+    fastmath=True,
 )
 def _fill_matrices_jit(S, go_q, ge_q, go_t, ge_t, M, X, Y, is_local):
     """Main DP fill — 3-state affine-gap recurrence with per-residue gap costs.
@@ -113,7 +115,7 @@ class DPResult:
     debugging + comparing runs across modes)."""
 
     columns: list[tuple[int, int]]  # (qi, ti) pairs, gaps as -1
-    path_score: float               # sum of M-state visits (PMI)
+    path_score: float  # sum of M-state visits (PMI)
     q_start: int
     q_end: int  # exclusive
     t_start: int
@@ -141,8 +143,7 @@ def affine_gap_dp(
         raise ValueError(f"S must be 2-D, got shape {S.shape}")
     lq, lt = S.shape
     if lq == 0 or lt == 0:
-        return DPResult(columns=[], path_score=0.0,
-                         q_start=0, q_end=0, t_start=0, t_end=0)
+        return DPResult(columns=[], path_score=0.0, q_start=0, q_end=0, t_start=0, t_end=0)
 
     go_q = np.ascontiguousarray(go_q, dtype=np.float32)
     ge_q = np.ascontiguousarray(ge_q, dtype=np.float32)
@@ -162,12 +163,24 @@ def affine_gap_dp(
     _fill_matrices_jit(S, go_q, ge_q, go_t, ge_t, M, X, Y, mode == "local")
 
     start_i, start_j, start_state, best_score = _select_traceback_start(
-        M, X, Y, mode,
+        M,
+        X,
+        Y,
+        mode,
     )
     columns = _traceback(
-        S, M, X, Y, start_i, start_j, start_state,
+        S,
+        M,
+        X,
+        Y,
+        start_i,
+        start_j,
+        start_state,
         mode=mode,
-        go_q=go_q, ge_q=ge_q, go_t=go_t, ge_t=ge_t,
+        go_q=go_q,
+        ge_q=ge_q,
+        go_t=go_t,
+        ge_t=ge_t,
     )
 
     if columns:
@@ -181,17 +194,24 @@ def affine_gap_dp(
         q_start = q_end = t_start = t_end = 0
 
     return DPResult(
-        columns=columns, path_score=float(best_score),
-        q_start=q_start, q_end=q_end,
-        t_start=t_start, t_end=t_end,
+        columns=columns,
+        path_score=float(best_score),
+        q_start=q_start,
+        q_end=q_end,
+        t_start=t_start,
+        t_end=t_end,
     )
 
 
 def _initialize_boundaries(
-    M: np.ndarray, X: np.ndarray, Y: np.ndarray,
+    M: np.ndarray,
+    X: np.ndarray,
+    Y: np.ndarray,
     mode: DPMode,
-    go_q: np.ndarray, ge_q: np.ndarray,
-    go_t: np.ndarray, ge_t: np.ndarray,
+    go_q: np.ndarray,
+    ge_q: np.ndarray,
+    go_t: np.ndarray,
+    ge_t: np.ndarray,
 ) -> None:
     """Seed the boundary rows / columns based on the mode.
 
@@ -241,7 +261,10 @@ def _initialize_boundaries(
 
 
 def _select_traceback_start(
-    M: np.ndarray, X: np.ndarray, Y: np.ndarray, mode: DPMode,
+    M: np.ndarray,
+    X: np.ndarray,
+    Y: np.ndarray,
+    mode: DPMode,
 ) -> tuple[int, int, int, float]:
     lq = M.shape[0] - 1
     lt = M.shape[1] - 1
@@ -281,12 +304,18 @@ def _select_traceback_start(
 
 def _traceback(
     S: np.ndarray,
-    M: np.ndarray, X: np.ndarray, Y: np.ndarray,
-    i: int, j: int, state: int,
+    M: np.ndarray,
+    X: np.ndarray,
+    Y: np.ndarray,
+    i: int,
+    j: int,
+    state: int,
     *,
     mode: DPMode,
-    go_q: np.ndarray, ge_q: np.ndarray,
-    go_t: np.ndarray, ge_t: np.ndarray,
+    go_q: np.ndarray,
+    ge_q: np.ndarray,
+    go_t: np.ndarray,
+    ge_t: np.ndarray,
 ) -> list[tuple[int, int]]:
     """Walk back to the origin (or a zero cell in local mode)."""
     columns: list[tuple[int, int]] = []

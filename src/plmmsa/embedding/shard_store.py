@@ -100,8 +100,7 @@ class ShardStore:
         self._id_prefix_strip = id_prefix_strip
         self._index_db = Path(index_db) if index_db else self.root / "index.db"
         self._fallback_dirs: tuple[Path, ...] = tuple(
-            (self.root / d) if not Path(d).is_absolute() else Path(d)
-            for d in fallback_dirs
+            (self.root / d) if not Path(d).is_absolute() else Path(d) for d in fallback_dirs
         )
         # Per-thread handles (unused today, reserved if we switch to pooling).
         self._tls = threading.local()
@@ -169,9 +168,7 @@ class ShardStore:
             return []
         index_by_filename: dict[str, str] = {}
         if self.root.is_dir() and self._index_db.is_file():
-            index_by_filename = self._index_lookup_batch(
-                [self._filename_for(i) for i in ids]
-            )
+            index_by_filename = self._index_lookup_batch([self._filename_for(i) for i in ids])
         out: list[tuple[str, Path | None]] = []
         for rid in ids:
             filename = self._filename_for(rid)
@@ -247,14 +244,13 @@ class ShardStore:
         one connection pool is reused across requests."""
         if self._redis_client is None:
             if not self._redis_url:
-                raise RuntimeError(
-                    "ShardStore.redis_url is unset; cannot construct async client"
-                )
+                raise RuntimeError("ShardStore.redis_url is unset; cannot construct async client")
             # Import lazily — keeps `redis.asyncio` out of cold paths.
             import redis.asyncio as aioredis
 
             self._redis_client = aioredis.Redis.from_url(
-                self._redis_url, decode_responses=False,
+                self._redis_url,
+                decode_responses=False,
             )
         return self._redis_client
 
@@ -262,7 +258,7 @@ class ShardStore:
         """Strip the `UniRef50_` prefix (if present) to match how Redis
         keys + shard filenames are stored."""
         if self._id_prefix_strip and uniref_id.startswith(self._id_prefix_strip):
-            return uniref_id[len(self._id_prefix_strip):]
+            return uniref_id[len(self._id_prefix_strip) :]
         return uniref_id
 
     def load_tensor(self, path: Path) -> np.ndarray | None:
@@ -282,12 +278,10 @@ class ShardStore:
         """
         bare = uniref_id
         if self._id_prefix_strip and bare.startswith(self._id_prefix_strip):
-            bare = bare[len(self._id_prefix_strip):]
+            bare = bare[len(self._id_prefix_strip) :]
         return f"{bare}.pt"
 
-    def _resolve_path(
-        self, filename: str, index_by_filename: dict[str, str]
-    ) -> Path | None:
+    def _resolve_path(self, filename: str, index_by_filename: dict[str, str]) -> Path | None:
         # 1. SQLite index hit.
         folder = index_by_filename.get(filename)
         if folder is not None:
@@ -295,9 +289,7 @@ class ShardStore:
             if candidate.is_file():
                 return candidate
             # Stale row — file moved / deleted. Fall through to fallback dirs.
-            logger.warning(
-                "shard_store: index row points at missing file %s", candidate
-            )
+            logger.warning("shard_store: index row points at missing file %s", candidate)
 
         # 2. Fallback dirs — flat .pt files, possibly with _F<n> suffixes.
         stem = filename[:-3]  # strip ".pt"
@@ -344,8 +336,7 @@ class ShardStore:
                 chunk = filenames[start : start + 500]
                 placeholders = ",".join("?" * len(chunk))
                 rows = conn.execute(
-                    f"SELECT file_path, folder_name FROM files "
-                    f"WHERE file_path IN ({placeholders})",
+                    f"SELECT file_path, folder_name FROM files WHERE file_path IN ({placeholders})",
                     chunk,
                 ).fetchall()
                 for fp, folder in rows:
@@ -365,9 +356,7 @@ class ShardStore:
         try:
             import torch  # heavy import; lazy
 
-            tensor = torch.load(
-                str(path), map_location="cpu", weights_only=True
-            )
+            tensor = torch.load(str(path), map_location="cpu", weights_only=True)
         except FileNotFoundError:
             logger.warning("shard_store: %s disappeared mid-read", path)
             return None

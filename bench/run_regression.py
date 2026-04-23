@@ -207,13 +207,8 @@ def main(argv: list[str] | None = None) -> int:
             # excludes queue wait (started_at - created_at) and client poll
             # latency, so it's the stage we actually care about tuning.
             if job.get("started_at") and job.get("finished_at"):
-                per_target_pipeline[target.name] = float(
-                    job["finished_at"] - job["started_at"]
-                )
-            print(
-                f"  wall={wall:.1f}s pipeline="
-                f"{per_target_pipeline.get(target.name, 0.0):.1f}s"
-            )
+                per_target_pipeline[target.name] = float(job["finished_at"] - job["started_at"])
+            print(f"  wall={wall:.1f}s pipeline={per_target_pipeline.get(target.name, 0.0):.1f}s")
             ok, issues = evaluate(target, job)
             if ok:
                 print("  ok")

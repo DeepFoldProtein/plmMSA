@@ -1,48 +1,94 @@
 # plmMSA
 
-A protein language model (PLM) based MSA server.
+A protein language model (PLM) based MSA server. Drop-in replacement for
+MMseqs2 MSA generation in ColabFold / Boltz / Protenix, powered by
+Ankh-CL + ESM-1b retrieval and ProtT5 / Ankh-Large pairwise alignment.
 
-DeepFold-PLM is under-cited largely because obtaining plmMSAs is the bottleneck.
-The goal of this repo is a hosted plmMSA server (plus a ColabFold notebook / API
-glue, shipped separately) that makes the method trivially reusable.
+DeepFold-PLM is under-cited largely because obtaining plmMSAs is the
+bottleneck — a hosted server makes the method trivially reusable.
 
-## Quickstart
+---
 
-**Client** (hitting a running server):
+## For end users
 
-- Full recipe with curl + Python examples, errors, and limits:
-  [`docs/submitting-msa.md`](./docs/submitting-msa.md).
-- TL;DR — `/v2/msa` is anonymous; no token needed for MSA submission.
+Public endpoint: **`https://plmmsa.deepfold.org`** (anonymous; no token
+required for MSA submission).
 
-  ```bash
-  # Submit an MSA job. With no `models` field, the server aggregates every
-  # enabled PLM that has a VDB collection (today: ankh_cl + esm1b) and
-  # unions the hits by target id.
-  curl -X POST https://plmmsa.deepfold.org/v2/msa \
-    -H "Content-Type: application/json" \
-    -d '{"sequences": ["MKTIIAL..."], "k": 500}'
+### Submit a job in the browser
 
-  # Poll (status: queued → running → succeeded) and extract A3M
-  curl https://plmmsa.deepfold.org/v2/msa/<job_id> \
-    | jq -r '.result.payload' > query.a3m
-  ```
+The static web UI lives at
+[`https://plmmsa.deepfold.org/ui`](https://plmmsa.deepfold.org/ui) —
+paste a sequence, pick an aligner / mode, click Submit. Job ids are
+cached in `localStorage`; copy the URL to share (`?job=<uuid>` loads
+that specific job in a fresh browser). No accounts, no build step on
+our side either — it's plain HTML / JS served by FastAPI.
 
-  Tokens are only needed for `/v2/embed`, `/v2/search`, `/v2/align`, and
-  `/admin/*` — the raw-service passthroughs and admin API.
-
-**Operator** (standing up the stack):
+### One-shot curl
 
 ```bash
-cp .env.example .env            # edit for your host
+# Submit an MSA job.
+JOB=$(curl -sS -X POST https://plmmsa.deepfold.org/v2/msa \
+    -H "Content-Type: application/json" \
+    -d '{"sequences": ["MKTIIAL..."]}' | jq -r .job_id)
+
+# Poll until status is "succeeded"; result.payload holds the A3M.
+while [[ "$(curl -sS https://plmmsa.deepfold.org/v2/msa/$JOB | jq -r .status)" \
+          != "succeeded" ]]; do sleep 5; done
+
+curl -sS https://plmmsa.deepfold.org/v2/msa/$JOB \
+    | jq -r .result.payload > query.a3m
+```
+
+Every knob (aligner, mode, filter, paired, score model, VDB collection,
+output format) is optional — the server picks sensible defaults. Full
+recipe with the request-field table, error codes, and Python examples:
+[`docs/submitting-msa.md`](./docs/submitting-msa.md).
+
+### Drop-in MSA server for folding engines
+
+plmMSA speaks the **ColabFold MsaServer wire shape** under
+`/v2/colabfold/{plmmsa,otalign}/*` — point any engine's MSA-server URL
+at one of those prefixes and it Just Works. Two flavors:
+
+- `/v2/colabfold/plmmsa` — PLMAlign (fast, ProtT5 shard-backed).
+- `/v2/colabfold/otalign` — OTalign (Sinkhorn + position-specific DP).
+
+| Engine                                                                       | Recipe                                                                                                |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **ColabFold** ([`colabfold_batch`](https://github.com/sokrypton/ColabFold))  | `colabfold_batch --host-url https://plmmsa.deepfold.org/v2/colabfold/plmmsa input.fasta out/`         |
+| **Boltz** ([`boltz predict`](https://github.com/jwohlwend/boltz))            | `boltz predict --use_msa_server --msa_server_url https://plmmsa.deepfold.org/v2/colabfold/plmmsa ...` |
+| **Protenix** ([`bytedance/Protenix`](https://github.com/bytedance/Protenix)) | Set the MSA-server URL in the inference config to `https://plmmsa.deepfold.org/v2/colabfold/plmmsa`.  |
+
+Swap `.../plmmsa` for `.../otalign` to use OTalign instead. Paired MSA
+(multimer) support lands with the paired-MSA feature (see
+[`PLAN.md`](./PLAN.md)); single-chain MSAs work now.
+
+### Response format
+
+plmMSA returns A3M by default — the same format ColabFold / AlphaFold
+consume directly. The server stats block (`result.stats`) includes
+`hits_found`, `hits_pre_filter`, `hits_post_filter`, `filter_applied`,
+and `filter_threshold` so you can see what the pipeline kept vs. what
+got dropped by the Algorithm 1 step 5 filter.
+
+---
+
+## For operators
+
+```bash
+cp .env.example .env                      # edit for your host
 cp settings.example.toml settings.toml
 ./bin/up.sh
 curl http://localhost:8080/health
 curl http://localhost:8080/v2/version
 ```
 
-See [`docs/maintenance.md`](./docs/maintenance.md) for the operator runbook
-and [`docs/cloudflare-tunnel.md`](./docs/cloudflare-tunnel.md) for publishing
-under your own hostname.
+See [`docs/maintenance.md`](./docs/maintenance.md) for the operator
+runbook (service knobs, auth tokens, wipe/reload, VDB construction) and
+[`docs/cloudflare-tunnel.md`](./docs/cloudflare-tunnel.md) for publishing
+the stack under your own hostname.
+
+---
 
 ## Architecture
 
@@ -56,6 +102,19 @@ The public surface (`/v2/*`) enforces input validation (1022 res/chain,
 idempotent submission, queue backpressure, and an audit log. See
 [`docs/submitting-msa.md`](./docs/submitting-msa.md) §2 for the full
 limits + error-code table.
+
+**Performance** (k=1000 CASP15 targets, current trunk):
+
+| Target | Length | PLMAlign | OTalign |
+| ------ | -----: | -------: | ------: |
+| T1132  |    102 |    ~10 s |   ~22 s |
+| T1104  |    106 |    ~27 s |   ~28 s |
+| T1120  |    235 |    ~30 s |   ~42 s |
+
+PLMAlign is roughly 2× faster because ProtT5's shard store + Redis path
+index make the target-embedding phase disk-only. OTalign's Ankh-Large
+score model still re-embeds per job; a fused-kernel Sinkhorn (`FlashSinkhorn`)
+and Ankh-Large shard store are on the roadmap.
 
 ## Observability
 

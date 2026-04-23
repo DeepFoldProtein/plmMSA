@@ -143,16 +143,12 @@ def unbalanced_sinkhorn(
         # Subtract the per-row max for numerical stability.
         m_j = (g[None, :] - C) / eps  # (Lq, Lt)
         m_max = m_j.max(axis=1, keepdims=True)
-        lse_q = (m_max.squeeze(1) + np.log(
-            np.exp(m_j - m_max).sum(axis=1)
-        )).astype(np.float32)
+        lse_q = (m_max.squeeze(1) + np.log(np.exp(m_j - m_max).sum(axis=1))).astype(np.float32)
         f = (scale * (eps * log_a - eps * lse_q)).astype(np.float32)
 
         m_i = (f[:, None] - C) / eps  # (Lq, Lt)
         m_max_i = m_i.max(axis=0, keepdims=True)
-        lse_t = (m_max_i.squeeze(0) + np.log(
-            np.exp(m_i - m_max_i).sum(axis=0)
-        )).astype(np.float32)
+        lse_t = (m_max_i.squeeze(0) + np.log(np.exp(m_i - m_max_i).sum(axis=0))).astype(np.float32)
         g = (scale * (eps * log_b - eps * lse_t)).astype(np.float32)
 
         df = float(np.max(np.abs(f - f_prev)))
@@ -164,7 +160,9 @@ def unbalanced_sinkhorn(
     if not converged:
         logger.warning(
             "sinkhorn: did not converge in %d iters (eps=%g, tau=%g)",
-            n_iter, eps, tau,
+            n_iter,
+            eps,
+            tau,
         )
 
     # Primal plan from dual potentials.

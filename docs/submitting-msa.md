@@ -172,7 +172,7 @@ A3M rows carry the raw alignment score in the FASTA header
 | `limits.max_body_bytes`          | 10 MB                    | `E_INVALID_FASTA` (413)                 |
 | non-AA characters in `sequences` | —                        | `E_INVALID_FASTA` (400)                 |
 | unknown `model`                  | —                        | `E_UNSUPPORTED_MODEL` (400)             |
-| `ratelimit.per_ip_rpm`           | 30                       | `E_RATE_LIMITED` (429)                  |
+| `ratelimit.per_ip_rpm`           | 60                       | `E_RATE_LIMITED` (429)                  |
 | `ratelimit.per_token_rpm`        | 120 (override per token) | `E_RATE_LIMITED` (429)                  |
 | `queue.backpressure_threshold`   | 50                       | `E_QUEUE_FULL` (503, `Retry-After: 5`)  |
 | `queue.max_queue_depth`          | 200                      | `E_QUEUE_FULL` (503, `Retry-After: 30`) |

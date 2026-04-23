@@ -90,7 +90,7 @@ def decode(blob: bytes) -> tuple[dict[str, Any], np.ndarray, list[np.ndarray]]:
     if version != VERSION:
         raise ValueError(f"unsupported frame version {version}; expected {VERSION}")
 
-    meta = json.loads(blob[pos:pos + meta_len].decode("utf-8"))
+    meta = json.loads(blob[pos : pos + meta_len].decode("utf-8"))
     pos += meta_len
     if n_tensors < 1:
         raise ValueError("frame has zero tensors; query is required")
@@ -153,7 +153,7 @@ def decode_tensors(blob: bytes) -> tuple[dict[str, Any], list[np.ndarray]]:
     if version != VERSION:
         raise ValueError(f"unsupported frame version {version}; expected {VERSION}")
 
-    meta = json.loads(blob[pos:pos + meta_len].decode("utf-8"))
+    meta = json.loads(blob[pos : pos + meta_len].decode("utf-8"))
     pos += meta_len
 
     tensors: list[np.ndarray] = []

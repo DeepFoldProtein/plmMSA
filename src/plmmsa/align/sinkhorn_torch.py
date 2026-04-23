@@ -107,9 +107,11 @@ def unbalanced_sinkhorn_torch(
 
     if not converged:
         logger.warning(
-            "sinkhorn_torch: did not converge in %d iters "
-            "(eps=%g, tau=%g, device=%s)",
-            n_iter, eps, tau, dev,
+            "sinkhorn_torch: did not converge in %d iters (eps=%g, tau=%g, device=%s)",
+            n_iter,
+            eps,
+            tau,
+            dev,
         )
 
     P = torch.exp((f.unsqueeze(1) + g.unsqueeze(0) - C_t) / eps)

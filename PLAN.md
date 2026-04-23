@@ -288,6 +288,48 @@ Open question:
   CASP15 multimer fixtures with 2×, 5×, 10× and pick the knee.
   Target deepfold2's paired coverage as the calibration anchor.
 
+**Alignment uses ProtT5 via the shard store — paired mode is fast
+by construction.** PLMAlign defaults `score_model = "prott5"`. ProtT5
+has the shard store, so the per-chain **alignment phase** reads
+precomputed per-residue embeddings off disk — one Redis MGET +
+~1500 parallel `torch.load` calls, roughly `1 s/chain` after the
+Redis path-index landed (see the k=1000 benchmark).
+
+**Pairing and alignment can use different PLMs.** Add a separate
+`pair_plm` knob to the submit surface (default: ProtT5, for the
+shard-backed fast path). The pipeline is then:
+
+1. **Pairing retrieval** runs on `pair_plm` — uses whichever VDB
+   that PLM has + the shard store for target embeddings. Cheap
+   regardless of which aligner you pick.
+2. **Alignment** runs on `aligner` + `score_model` exactly like
+   unpaired does. OTalign keeps its Ankh-Large score matrix;
+   PLMAlign keeps ProtT5.
+
+This keeps OTalign's paired-mode latency reasonable: retrieval +
+taxonomy join use the fast ProtT5 shard path, and only the
+final alignment pass runs through Ankh-Large (unavoidable — that's
+the aligner's defining cost).
+
+Open: until the ProtT5 retrieval VDB exists, `pair_plm` defaults to
+whichever of the existing VDBs (`ankh_cl` / `esm1b`) has the
+smallest retrieval cost. Re-evaluate once the ProtT5 VDB lands.
+
+Retrieval (Ankh-CL + ESM-1b VDB search) is the remaining per-chain
+fixed cost; at `paired_k = 3 × 1000`, that's 3× more ids to fetch
+and align. PLMAlign's numba-JIT'd DP at ~1 ms/target keeps Phase 5
+under 10 s per chain even for the 3× multiplier.
+
+**ProtT5 retrieval VDB** (deferred, larger project): build a FAISS
+index over ProtT5 pooled embeddings so retrieval itself is
+ProtT5-native. Then the whole pipeline runs on one PLM with
+disk-backed target embeddings — no Ankh-CL forward per query, no
+ESM-1b forward per query, and no cross-PLM embedding pass.
+Expected win: Phase 1 drops from ~2 × PLM forward (Ankh-CL +
+ESM-1b) to ~1 × PLM forward (ProtT5), and the retrieval depth
+becomes single-PLM so there's no union step. Requires the offline
+pass described under "VDB construction guide" in CLAUDE.md.
+
 ### Downstream-model integration guide
 
 All three engines accept an **MSA API URL argument** — the
@@ -463,6 +505,87 @@ flavor (request + expected response) and replay through FastAPI's
       aggregate path. Requires a one-time offline pass over UniRef50 to
       produce per-sequence `.pt` files + an SQLite index; reuses the
       existing `ShardStore` reader unchanged.
+- [ ] **FlashSinkhorn — fused-kernel unbalanced Sinkhorn.**
+      Current state: `sinkhorn_torch.py` does the Sinkhorn iteration
+      in plain torch ops — one `log_softmax`-ish reduction per
+      dual-variable update, ~100 iterations per target, one torch
+      kernel launch per op. For the CASP15 k=1000 OTalign run
+      (1553 targets × 106-aa query), Phase 5 is ~24 s after the DP
+      JIT; profiling shows ~40% of that is CUDA kernel launch +
+      small-matrix allocator overhead, not math.
+
+      Design (mirrors the FlashAttention trick):
+      - One fused Triton / CUDA kernel per target: hold `C`, `f`,
+        `g` in SRAM; run the entire Sinkhorn loop (n_iter
+        iterations of log-space scaled updates) without returning
+        to HBM between iterations.
+      - Tiled along the `Lq × Lt` axis for queries / targets that
+        exceed SRAM. For our sizes (`Lq ≈ 100-300`, `Lt ≈ 100-400`)
+        the entire cost matrix fits in one SM's shared memory, so
+        tiling is only needed for pathological inputs.
+      - Batch the fused kernel over targets: one CUDA launch for
+        1553 targets instead of 1553 × n_iter launches. Uses
+        `torch.compile` with a custom op, or Triton directly.
+      - Keep fp32 — the precision argument in
+        `sinkhorn_torch.py` is unchanged (log-space residuals need
+        the range).
+
+      Expected payoff: Phase 5 OTalign 24 s → ~5-8 s at k=1000, based
+      on FlashAttention's typical 4-8× speedup on small-matrix /
+      kernel-launch-bound workloads. Validation: OTalign's transport
+      plan `P` should match the current torch implementation to
+      within 1e-4 (tighter than Sinkhorn's `tol=1e-4` default).
+
+      Dependencies: Triton 2.x (already pulled in via torch 2.8),
+      a GPU with CUDA compute capability ≥ 7.5 (RTX 6000 Ada is
+      8.9). Ship behind a `aligners.otalign.fused_sinkhorn = true`
+      settings flag so the torch fallback stays the default until
+      correctness is cross-validated on the CASP15 benchmark.
+
+      **Avoiding per-shape recompilation.** Triton JIT-compiles
+      once per distinct value of `tl.constexpr` kernel params, not
+      per input tensor shape. So the design has to pass `Lq, Lt`
+      as runtime `int` args (NOT `tl.constexpr`) — the kernel
+      handles arbitrary matrix sizes via boundary masks, and one
+      compile covers every job. Tile sizes `BLOCK_Q`, `BLOCK_T`
+      stay `constexpr` with a small fixed set (e.g., 128×128 and
+      128×256 for the two common aspect ratios). Optional
+      pad-to-bucket (round `Lq` / `Lt` up to a power of 2) if we
+      observe measurable tail-iteration divergence on the
+      boundary-masked path.
+
+      **Autotune on hidden (embedding) dimension.** The cost-matrix
+      construction `C = q @ t.T` has its hot axis on the shared K
+      dim = PLM hidden dim (ProtT5=1024, Ankh-Large=1536). Pick
+      block sizes differently for those two. Use
+      `@triton.autotune(configs=[Config(...), ...], key=["D"])`
+      with `D` as a runtime arg — Triton caches the best config
+      per observed D, so the first Ankh-Large call compiles once
+      (say 128×128×64) and every subsequent Ankh-Large OTalign
+      reuses it; same separately for ProtT5. Key the autotune on
+      D alone (NOT on Lq/Lt) so the cache stays small (one entry
+      per hidden dim, not per input shape).
+
+      **Validation sequence after implementation lands:**
+      1. **Micro-benchmark FlashSinkhorn in isolation.** Script
+         that times one OTalign pair at matrix sizes spanning the
+         CASP15 distribution (Lq ∈ {100, 200, 400, 800},
+         Lt = same set) + both hidden dims (1024 / 1536). Record
+         kernel time + a correctness check vs. the torch
+         Sinkhorn (max abs diff in `P` < 1e-4 per the design
+         tolerance). Land under `bench/flash_sinkhorn.py`.
+      2. **CASP15 end-to-end rerun.** Re-run the 6-job benchmark
+         (T1104 / T1120 / T1132 × plmalign / otalign) with
+         `aligners.otalign.fused_sinkhorn = true` and compare
+         Phase 5 timings against the current
+         numba-JIT-DP-only baseline. Expected: OTalign Phase 5
+         24 s → ~5-8 s at k=1000.
+      3. **Full regression run.** Drive
+         `bench/run_regression.py` on the complete CASP15 fixture
+         set, both aligners, paired + unpaired. Compare MSA
+         depth, composition, and identity bands against the
+         recorded baselines. Lands the new OTalign numbers in
+         `tests/fixtures/casp15/expected_stats.json` once verified.
 
 ## Open-source readiness
 

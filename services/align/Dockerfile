@@ -1,7 +1,13 @@
 FROM python:3.11-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        curl ca-certificates \
+        # gcc + build tooling: torch.compile / Inductor needs a C
+        # compiler at runtime to build the Triton kernels that back
+        # FlashSinkhorn. Without these, `_warmup_fused_sinkhorn` raises
+        # "Failed to find C compiler" and falls back to the eager path.
+        gcc g++ make \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv==0.5.11

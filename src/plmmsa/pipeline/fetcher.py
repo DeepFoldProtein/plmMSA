@@ -7,6 +7,7 @@ from pathlib import Path
 from redis.asyncio import Redis
 
 DEFAULT_SEQ_KEY_FORMAT = "seq:{id}"
+DEFAULT_TAX_KEY_FORMAT = "tax:{id}"
 
 
 class TargetFetcher(ABC):
@@ -22,15 +23,35 @@ class TargetFetcher(ABC):
         """Map requested ids to sequences. Unknown ids are silently dropped."""
         ...
 
+    async def fetch_taxonomy(self, ids: Sequence[str]) -> dict[str, str]:
+        """Map requested ids to NCBI taxonomy id (as a string).
+
+        Default returns an empty map — only Redis-backed deployments carry
+        taxonomy metadata (populated by `build_sequence_cache.py` from
+        UniRef50 `TaxID=<n>` headers). Paired-MSA callers treat a missing
+        entry as "taxonomy unknown" and drop the hit from pairing, so the
+        missing-by-default behavior is safe.
+        """
+        return {}
+
 
 class DictTargetFetcher(TargetFetcher):
     """In-memory fetcher. Unknown ids are dropped."""
 
-    def __init__(self, id_to_seq: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        id_to_seq: Mapping[str, str] | None = None,
+        *,
+        id_to_taxonomy: Mapping[str, str] | None = None,
+    ) -> None:
         self._data: dict[str, str] = dict(id_to_seq or {})
+        self._tax: dict[str, str] = dict(id_to_taxonomy or {})
 
     async def fetch(self, collection: str, ids: Sequence[str]) -> dict[str, str]:
         return {i: self._data[i] for i in ids if i in self._data}
+
+    async def fetch_taxonomy(self, ids: Sequence[str]) -> dict[str, str]:
+        return {i: self._tax[i] for i in ids if i in self._tax}
 
 
 class RedisTargetFetcher(TargetFetcher):
@@ -47,9 +68,11 @@ class RedisTargetFetcher(TargetFetcher):
         redis: Redis,
         *,
         key_format: str = DEFAULT_SEQ_KEY_FORMAT,
+        tax_key_format: str = DEFAULT_TAX_KEY_FORMAT,
     ) -> None:
         self._redis = redis
         self._key_format = key_format
+        self._tax_key_format = tax_key_format
 
     async def fetch(self, collection: str, ids: Sequence[str]) -> dict[str, str]:
         if not ids:
@@ -64,6 +87,25 @@ class RedisTargetFetcher(TargetFetcher):
                 value = value.decode("utf-8")
             result[ident] = value
         return result
+
+    async def fetch_taxonomy(self, ids: Sequence[str]) -> dict[str, str]:
+        """MGET `tax:<id>` → NCBI taxonomy id (string). Ids missing a tax
+        entry are dropped from the returned map — callers treat that as
+        "taxonomy unknown" and skip the hit for pairing."""
+        if not ids:
+            return {}
+        if not self._tax_key_format:
+            return {}
+        keys = [self._tax_key_format.format(id=i) for i in ids]
+        raw = await self._redis.mget(keys)  # pyright: ignore[reportGeneralTypeIssues]
+        out: dict[str, str] = {}
+        for ident, value in zip(ids, raw, strict=True):
+            if value is None:
+                continue
+            if isinstance(value, bytes):
+                value = value.decode("utf-8")
+            out[ident] = value
+        return out
 
 
 class FastaTargetFetcher(TargetFetcher):

@@ -25,9 +25,7 @@ class _FakeStore(ShardStore):
         self.dim = dim
         self._embeddings = embeddings
 
-    def fetch(
-        self, ids: list[str]
-    ) -> tuple[dict[str, np.ndarray], list[str]]:
+    def fetch(self, ids: list[str]) -> tuple[dict[str, np.ndarray], list[str]]:
         found = {rid: self._embeddings[rid] for rid in ids if rid in self._embeddings}
         missing = [rid for rid in ids if rid not in self._embeddings]
         return found, missing
@@ -84,7 +82,8 @@ def test_embed_by_id_serves_when_backend_is_disabled() -> None:
     model should 400 because the model isn't loaded — that's the contract
     test for the cache-only deployment mode."""
     store = _FakeStore(
-        dim=4, embeddings={"UniRef50_A": _arr(5, 4)},
+        dim=4,
+        embeddings={"UniRef50_A": _arr(5, 4)},
     )
     app = create_app(
         backends_override={},  # no PLMs loaded
@@ -142,5 +141,6 @@ def test_embed_by_id_batch_cap_is_422() -> None:
 @pytest.fixture(autouse=True)
 def _quiet_warnings():
     import warnings
+
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     yield

@@ -57,6 +57,12 @@ Unauthenticated:
   purpose so clients can submit without minting a token. Abuse is bounded
   by the per-IP rate limiter + queue backpressure. Drive-by cancellation
   is mitigated by UUID4 job ids (not enumerable).
+- `POST/GET /v2/colabfold/{plmmsa,otalign}/*` — ColabFold-compat
+  entrypoints (mirrors MMseqs2 MsaServer shape). Same anonymous
+  posture as `/v2/msa`; drop-in target for `colabfold_batch --host-url`,
+  `boltz predict --msa_server_url`, and Protenix's MSA-server config.
+- `GET /ui/*` — static submit-a-job web UI. Pure client; no new
+  server-side state. Users bookmark `<host>/ui/`.
 - `/health`, `/v2/version`, `/metrics`, `/v1/*` (sunset), `/openapi.json`,
   `/docs`, `/redoc`.
 
@@ -440,7 +446,7 @@ Everything below is in `settings.toml` — edit, then `docker compose restart`.
 | `limits`     | `max_body_bytes`            | 10 MB   | Request body cap (ASGI middleware)       |
 | `queue`      | `backpressure_threshold`    | 50      | Soft 503 `E_QUEUE_FULL` (Retry-After 5)  |
 | `queue`      | `max_queue_depth`           | 200     | Hard 503 `E_QUEUE_FULL` (Retry-After 30) |
-| `ratelimit`  | `per_ip_rpm`                | 30      | Per-IP requests/min                      |
+| `ratelimit`  | `per_ip_rpm`                | 60      | Per-IP requests/min                      |
 | `ratelimit`  | `per_token_rpm`             | 120     | Default per-token requests/min           |
 | `api`        | `default_token_ttl_s`       | 90 days | TTL applied when mint omits `expires_at` |
 | `logging`    | `level`                     | INFO    | Global log level                         |
@@ -451,6 +457,8 @@ Everything below is in `settings.toml` — edit, then `docker compose restart`.
 | `queue`      | `embed_chunk_size`          | 256     | Target-embed batch size per `/embed` call. Length-descending sort means only the first chunk pays max-length padding; 256 fills a 48 GB GPU at `max_length=1022` fp32. Drop on smaller GPUs. |
 | `queue`      | `default_k`                 | 1000    | FAISS neighbors per model when the client omits `k`. |
 | `aligners.*` | `filter_enabled`            | per-aligner | Apply Algorithm 1 step 5 filter (threshold `min(0.2·len(Q), 8.0)`). Default-on for `plmalign` (dot-product alignment score scale); default-off for `otalign` (transport-mass score scale where the threshold zeroes every hit). Flip per-aligner in settings or per-request via `filter_by_score`. |
+| `aligners.otalign` | `fused_sinkhorn`      | false       | Use `sinkhorn_flash.unbalanced_sinkhorn_flash` (torch.compile chunked) instead of the eager torch solver. Adds ~3-10 s warmup cost at server startup; cuts Phase 5 per-target latency on CUDA. Leave off for CPU-only deployments or when debugging. |
+| `queue`      | `paired_k_multiplier`       | 3           | Paired-MSA retrieval multiplier. When `paired=true` each chain retrieves `paired_k = multiplier * effective_k` neighbors so the taxonomy-join step still leaves a useful pool per chain. |
 
 ### Aligner performance notes
 
@@ -478,6 +486,15 @@ Everything below is in `settings.toml` — edit, then `docker compose restart`.
   additionally accepts `glocal`, `q2t`, `t2q` — passed verbatim to the
   DP (no silent `global → glocal` substitution). PLMAlign / pLM-BLAST
   400 on the OTalign-only modes.
+- **FlashSinkhorn** (`aligners.otalign.fused_sinkhorn = true`). Wraps
+  the Sinkhorn iteration loop in a `torch.compile`'d 16-iteration
+  chunk; saves ~3-6 s per OTalign job at k=1000 on the CASP15 targets
+  (measured in `docs/submitting-msa.md`'s perf table). The align
+  image ships with `gcc/g++/make` specifically so Inductor can build
+  the Triton-backed kernels at runtime — if you strip those, warmup
+  falls through to the eager solver with a WARN. `_warmup_fused_sinkhorn`
+  at server start pays the compile cost once on a 96×256 dummy
+  matrix; dynamic shapes mean subsequent job shapes don't recompile.
 
 ## Service-to-service wire formats
 

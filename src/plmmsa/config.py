@@ -98,6 +98,11 @@ class OTAlignEntry(AlignerEntry):
     # OTalign upstream (DeepFoldProtein/OTalign) pairs with Ankh-Large
     # embeddings by default; fp16 is acceptable on this model family.
     score_model: str = "ankh_large"
+    # FlashSinkhorn — replace the per-iteration torch Sinkhorn with a
+    # torch.compile'd fused-chunk variant. Same math (log-space UOT,
+    # fp32), ~3-5x faster at the CASP15 matrix sizes. Opt-in until
+    # cross-validated on the full regression fixture set.
+    fused_sinkhorn: bool = False
     # Torch device for the Sinkhorn solver + cost matrix. Empty string
     # = auto (cuda if available, cpu otherwise). Pin to "cuda:0" or
     # "cpu" for reproducibility. Align service must have a GPU
@@ -202,10 +207,17 @@ class QueueSettings(BaseModel):
     # 500 targets fan out nicely. Set to 1 for repros; operators with
     # tight CPU budgets can cap lower.
     align_threads: int = 32
+    # Paired-MSA retrieval multiplier. When the client submits
+    # `paired=true`, each chain is retrieved at `paired_k = multiplier *
+    # effective_k` (capped at the API-level max) so taxonomy filtering
+    # still leaves a useful pool per chain. 3x matches MMseqs2
+    # PairAlign's typical tuning; raise for sparser families, drop for
+    # compute budget.
+    paired_k_multiplier: int = 3
 
 
 class RateLimitSettings(BaseModel):
-    per_ip_rpm: int = 30
+    per_ip_rpm: int = 60
     per_token_rpm: int = 120
 
 

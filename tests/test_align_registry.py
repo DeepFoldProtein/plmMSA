@@ -13,8 +13,12 @@ class _FakeAligner(MatrixAligner):
 
     def align_matrix(self, sim, *, mode="local", **kwargs):
         return Alignment(
-            score=0.0, mode=mode, query_start=0, query_end=0,
-            target_start=0, target_end=0,
+            score=0.0,
+            mode=mode,
+            query_start=0,
+            query_end=0,
+            target_start=0,
+            target_end=0,
         )
 
 

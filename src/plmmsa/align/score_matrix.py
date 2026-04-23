@@ -38,9 +38,7 @@ class ScoreMatrixBuilder(Protocol):
 
     id: str
 
-    def build(
-        self, query: np.ndarray, targets: Sequence[np.ndarray]
-    ) -> list[np.ndarray]:
+    def build(self, query: np.ndarray, targets: Sequence[np.ndarray]) -> list[np.ndarray]:
         """Return one `[Lq, Lt_i]` similarity matrix per target.
 
         Must preserve target order and must return np.ndarray (float32) so
@@ -59,9 +57,7 @@ class DotBuilder:
 
     id = "dot"
 
-    def build(
-        self, query: np.ndarray, targets: Sequence[np.ndarray]
-    ) -> list[np.ndarray]:
+    def build(self, query: np.ndarray, targets: Sequence[np.ndarray]) -> list[np.ndarray]:
         q = np.asarray(query, dtype=np.float32)
         return [q @ np.asarray(t, dtype=np.float32).T for t in targets]
 
@@ -75,9 +71,7 @@ class CosineBuilder:
 
     id = "cosine"
 
-    def build(
-        self, query: np.ndarray, targets: Sequence[np.ndarray]
-    ) -> list[np.ndarray]:
+    def build(self, query: np.ndarray, targets: Sequence[np.ndarray]) -> list[np.ndarray]:
         q = _l2_normalize(query)
         return [q @ _l2_normalize(t).T for t in targets]
 
@@ -92,9 +86,7 @@ class DotZScoreBuilder:
 
     id = "dot_zscore"
 
-    def build(
-        self, query: np.ndarray, targets: Sequence[np.ndarray]
-    ) -> list[np.ndarray]:
+    def build(self, query: np.ndarray, targets: Sequence[np.ndarray]) -> list[np.ndarray]:
         q = np.asarray(query, dtype=np.float32)
         out: list[np.ndarray] = []
         for t in targets:

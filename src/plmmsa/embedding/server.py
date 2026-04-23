@@ -179,9 +179,7 @@ def create_app(
         }
         return HealthResponse(status="ok", service="embedding", models=models)
 
-    async def _resolve_embeddings(
-        model: str, sequences: list[str]
-    ) -> tuple[list[Any], int]:
+    async def _resolve_embeddings(model: str, sequences: list[str]) -> tuple[list[Any], int]:
         """Cache-aware embedding resolution shared by `/embed` and
         `/embed/bin`. Returns `(per_seq_tensors_in_input_order, dim)`.
         Each item is either a `torch.Tensor` (fresh encode, CPU) or
@@ -215,7 +213,7 @@ def create_app(
                         miss_seqs.append(sequences[i])
         else:
             miss_positions = list(range(len(sequences)))
-            miss_seqs = list(sequences)
+            miss_seqs = sequences
 
         if miss_seqs:
             try:
@@ -389,9 +387,7 @@ def create_app(
             arr = await asyncio.to_thread(store.load_tensor, path)
             return rid, arr
 
-        outcomes = await asyncio.gather(
-            *(_one(rid, path) for rid, path in resolved)
-        )
+        outcomes = await asyncio.gather(*(_one(rid, path) for rid, path in resolved))
         found: dict[str, Any] = {}
         missing: list[str] = []
         for rid, arr in outcomes:

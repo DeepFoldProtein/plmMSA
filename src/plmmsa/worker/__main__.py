@@ -118,16 +118,15 @@ async def _main() -> None:
     # looked up in the shard store first via /embed_by_id. Empty → keep
     # today's behavior (always /embed).
     shard_models_env = os.environ.get("PLMMSA_SHARD_MODELS", "")
-    shard_models = frozenset(
-        m.strip() for m in shard_models_env.split(",") if m.strip()
-    )
+    shard_models = frozenset(m.strip() for m in shard_models_env.split(",") if m.strip())
     if shard_models:
         logger.info("worker: shard-first target fetch enabled for %s", sorted(shard_models))
     # Collect the set of aligners whose post-score filter is enabled
     # in settings. OTalign defaults off because its score scale doesn't
     # match the upstream (0.2*L, 8.0) calibration.
     filter_enabled_aligners = frozenset(
-        aid for aid in ("plmalign", "plm_blast", "otalign")
+        aid
+        for aid in ("plmalign", "plm_blast", "otalign")
         if getattr(getattr(settings.aligners, aid, None), "filter_enabled", False)
     )
     orchestrator = Orchestrator(
@@ -137,6 +136,7 @@ async def _main() -> None:
             align_url=os.environ.get("ALIGN_URL", "http://align:8083"),
             default_k=settings.queue.default_k,
             embed_chunk_size=settings.queue.embed_chunk_size,
+            paired_k_multiplier=settings.queue.paired_k_multiplier,
             shard_models=shard_models,
             filter_enabled_aligners=filter_enabled_aligners,
             # score_model is resolved at the API edge per-aligner and
