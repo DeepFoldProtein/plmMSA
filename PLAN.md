@@ -60,16 +60,44 @@ this file is the check-list view of what shipped and what is next.
 - [x] Maintenance runbook: [`docs/maintenance.md`](./docs/maintenance.md) — start/stop, prereqs, host-path knobs, cache clearing, token rotation, failure modes.
 - [x] Stack smoke: `./bin/up.sh` with CPU-only services validated end-to-end (queue + worker + error propagation + admin-token mint/use).
 
+### M7 — performance, aligners, UX
+- [x] **Paired MSA** via MMseqs-style taxonomy join. Per-chain retrieval at `paired_k = queue.paired_k_multiplier * k` (default 3), `tax:UniRef50_<acc>` lookup, highest-scoring-per-chain-per-taxonomy selection, joint-score ranking. `/v2/msa` accepts `paired=true`; `assemble_paired_a3m` uses a `max(chain_len) // 10` gap separator (ColabFold convention). Stats block exposes `paired_rows`, `paired_taxonomies`, `paired_k_effective`.
+- [x] **OTalign real implementation.** `sinkhorn_torch.py` (log-space unbalanced Sinkhorn) + numba-JIT'd position-specific DP (`_fill_matrices_jit` in `otalign_dp.py`). Phase 5 dropped 63 s → 24 s on T1104 at k=1000. OTalign's PLMAlign Alg 1 step 5 filter defaults off (transport-mass score scale differs).
+- [x] **FlashSinkhorn** (`aligners.otalign.fused_sinkhorn`). `torch.compile`-fused 16-iteration chunk with convergence check at chunk boundaries; dynamic shapes so no per-size recompilation. `_warmup_fused_sinkhorn` at align startup pays the compile cost once. Measured 1.15-1.54× speedup on OTalign Phase 5 across CASP15 targets; `gcc/g++/make` added to the align image (Inductor builds Triton kernels at runtime).
+- [x] **External web frontend.** Static submit-a-job UI at `/ui/` ([src/plmmsa/api/public/](./src/plmmsa/api/public/)) — vanilla HTML/CSS/JS, no build step. Built-in colored MSA table viewer, query-param routing (`?job=<id>`, `?seq=<seq>`), localStorage job cache, adaptive 5 s / 60 s poll. Thin client over `/v2/*`.
+- [x] **ColabFold-compatible entrypoints** at `/v2/colabfold/{plmmsa,otalign}/*` — mirrors the MMseqs2 MsaServer wire shape so `colabfold_batch --host-url`, `boltz predict --msa_server_url`, and Protenix's MSA-server URL work as drop-ins. Each flavor hardwires its aligner; ticket id = plmMSA job id.
+
+### M8 — infra + observability
+- [x] **Aggregated `/health` on api.** Fans out in parallel to `embedding`, `vdb`, `align` `/health` (2 s per-probe, 3 s overall cap) and PINGs every Redis role. Returns a per-service readiness map; overall status is `ok` only when every downstream is ok. `asyncio.Lock`-guarded TTL (~1.5 s) de-duplicates bursts. Bare `/healthz` kept for the compose healthcheck + CF edge probe; compose switched to `/healthz` to avoid restart flap during downstream warmup. See [src/plmmsa/api/health.py](./src/plmmsa/api/health.py).
+- [x] **Completed-MSA result cache** (`plmmsa:result:*` on `cache-emb`). Key = `sha256` of a canonicalized submit body; value = canonical A3M result. api synthesizes a succeeded Job on hit (no queue touch, `result.stats.cache_hit = true`); worker writes best-effort on job success. `force_recompute=true` opts out per request. Operator env: `PLMMSA_RESULT_CACHE_URL`, `PLMMSA_RESULT_CACHE_TTL_S` (30 d). Versioned keyspace via `CACHE_VERSION`. See [src/plmmsa/jobs/result_cache.py](./src/plmmsa/jobs/result_cache.py).
+- [x] **End-to-end `X-Request-ID` propagation.** Per-sidecar `RequestContextMiddleware` on embedding / vdb / align binds a shared `ContextVar` and echoes the header on responses; api forwards on every internal httpx call (including the orchestrator's); worker rebinds from `job.request["request_id"]` on claim so downstream calls for a job carry the same id. `request_id` is excluded from idempotency + result-cache keys so retries still de-dup. See [src/plmmsa/request_context.py](./src/plmmsa/request_context.py).
+- [x] **Exception logging policy.** Every PlmMSAError handler (api / embedding / vdb / align) logs 5xx with `logger.exception` (full traceback) and 4xx with `logger.warning` (code + message only), tagged with method / path. Orchestrator + shard-store fallbacks use `exc_info=True` so silent per-model / Redis failures carry tracebacks.
+- [x] **CSV ingestion for `build_sequence_cache`.** `--csv` / `--csv-dir` modes for the `uniref50_t5/split/*.csv` layout; TaxID extracted from the `description` column via the same regex used on FASTA headers. `--start` / `--stop` slice the sorted file list for resume. FASTA path kept as `build_from_fasta` shim. See [src/plmmsa/tools/build_sequence_cache.py](./src/plmmsa/tools/build_sequence_cache.py).
+- [x] **Redis container uid override.** `REDIS_CONTAINER_USER` env (default `999:999`) on `cache-ops` / `cache-seq` / `cache-emb` so RDB/AOF files on disk are owned by the host user. On `deepfold` the `.env` sets `220104:220104` to match the `deepfold` UID/GID.
+- [x] **Host-path migration off `/store` onto `/gpfs`** (code side). `.env` + `.env.example` reflect the new paths (`MODEL_CACHE_DIR=/gpfs/deepfold/model_cache`, `CACHE_*_DATA_DIR=/gpfs/deepfold/service/cache_{ops,seq,emb}_data`) and the `REDIS_CONTAINER_USER` knob. Host-side dir creation (`mkdir -p` + `chown`) and weight rehydration via `hf download` are documented in [docs/maintenance.md](./docs/maintenance.md); operator steps remain.
+- [x] **Per-service Prometheus `/metrics`.** `plmmsa.metrics` hosts a shared `MetricsMiddleware` + `/metrics` router mounted on api / embedding / vdb / align (every HTTP sample labeled `service="..."`). Worker gets an embedded `prometheus_client` scrape target on `PLMMSA_WORKER_METRICS_PORT` (default 9090) emitting `plmmsa_worker_jobs_processed_total{status}`, `plmmsa_worker_pipeline_duration_seconds`, `plmmsa_worker_queue_depth`. Sidecar ports are bridge-only; scrape recipe lives in [docs/maintenance.md](./docs/maintenance.md#prometheus-metrics).
+
 ## Service readiness — before the first real MSA goes out
 
 Runbook for flipping the stack from "scaffolded" to "producing MSAs on UniRef50".
 
 ### 1. Host prerequisites
 - [ ] `nvidia-container-toolkit` installed (`docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` must succeed).
-- [ ] Writable host dirs exist with correct ownership:
-  - [ ] `MODEL_CACHE_DIR` (multi-GB; Ankh-CL alone is ~3 GB)
+- [ ] Writable host dirs exist with correct ownership (all `deepfold:deepfold`
+      on the `deepfold` host; Redis containers run as uid 220104 so files
+      on disk are owned by the host user — see the Redis uid override
+      item under Deferred):
+  - [ ] `MODEL_CACHE_DIR` (multi-GB; Ankh-CL alone is ~3 GB) —
+        `/gpfs/deepfold/model_cache` on deepfold. `/store` is dead;
+        do not use `/store/deepfold/huggingface`.
   - [ ] `VDB_DATA_DIR`
-  - [ ] `CACHE_DATA_DIR` (Redis persistence)
+  - [ ] `CACHE_OPS_DATA_DIR` — Redis persistence for jobs/tokens
+        (`/gpfs/deepfold/service/cache_ops_data`).
+  - [ ] `CACHE_SEQ_DATA_DIR` — Redis persistence for `seq:*` / `tax:*`
+        (`/gpfs/deepfold/service/cache_seq_data`).
+  - [ ] `CACHE_EMB_DATA_DIR` — Redis persistence for the result cache
+        (`/gpfs/deepfold/service/cache_emb_data`; was the embedding
+        cache, now repurposed — see Deferred).
 - [ ] `.env` filled in: GPU device pins, `ADMIN_TOKEN` rotated away from default.
 
 ### 2. Model weight warmup
@@ -96,6 +124,15 @@ for the test-vs-full index swap recipe + a synthetic `/search` sanity check.
 See [`docs/maintenance.md#uniref50-sequence-cache`](./docs/maintenance.md#uniref50-sequence-cache).
 `build_sequence_cache` emits two key spaces per record: `seq:{id}` → amino
 acid sequence and `tax:{id}` → NCBI TaxID (parsed from the UniRef50 header).
+
+Note: on the `deepfold` host the source of record is the UniRef50 **CSV
+split** at `/gpfs/database/milvus/datasets/uniref50_t5/split/*.csv`
+(1,359 files, 27 GB, columns `accession, description, sequence, length,
+length_group`), not a single FASTA. The current `build_sequence_cache`
+is FASTA-only; see the Deferred item "`seq:` / `tax:` cache ingestion
+from UniRef50 CSV" for the extension that turns the CSV split into the
+authoritative ingest path. The FASTA recipe below still works against
+`uniref50.fasta` for hosts that don't have the CSV split.
 - [ ] UniRef50 FASTA reachable (deepfold: `/gpfs/database/casp16/uniref50/uniref50.fasta`, 26 GB, ~60 M records).
 - [ ] Pick an id scheme that matches the active FAISS index. UniRef50 FASTA
       keys are `UniRef50_*`; the legacy `_test.faiss` returns UniParc
@@ -114,7 +151,7 @@ acid sequence and `tax:{id}` → NCBI TaxID (parsed from the UniRef50 header).
 - [ ] Decide whether to keep the bootstrap token as an active credential or retire it once minting is done.
 
 ### 6. Bring it all up
-- [ ] `./bin/up.sh` — all 6 services healthy (incl. `embedding` and `vdb`, which smoke skipped).
+- [ ] `./bin/up.sh` — all 8 services healthy (`api`, `embedding`, `vdb`, `align`, `worker`, `cache-ops`, `cache-seq`, `cache-emb`).
 - [ ] `curl http://localhost:8080/health` → ok.
 - [ ] `curl http://localhost:8080/v2/version` lists enabled models.
 - [ ] Submit T1120 from the regression fixtures; job succeeds; `result.format=a3m`, `result.stats.hits_fetched > 0`.
@@ -467,18 +504,23 @@ flavor (request + expected response) and replay through FastAPI's
 
 ## Deferred — pick up after the first real MSA ships
 
-- [ ] Paired MSA across chains with UniProt-ID → taxonomy lookup (sibling Redis or shared cache).
-- [ ] Per-token rate limits + Prometheus-format `/metrics` per service.
-- [ ] Request-ID propagation + structured JSON logs across services.
-- [ ] Result cache (`plmmsa:result:*`) with size + age eviction.
+- [ ] **Host-side completion of the `/gpfs` migration.** Code + `.env`
+      done (see M8). Still required on the `deepfold` host:
+      (a) `sudo mkdir -p /gpfs/deepfold/service/cache_{ops,seq,emb}_data`
+      and `chown deepfold:deepfold` those dirs before the next
+      `./bin/up.sh`.
+      (b) Rehydrate any missing checkpoints into
+      `/gpfs/deepfold/model_cache` via
+      `HF_HOME=/gpfs/deepfold/model_cache uv run hf download <repo>`
+      (Ankh-CL, Ankh-Large, ESM1b, ProtT5).
+      (c) Populate `cache-seq` with the CSV-split recipe documented in
+      [docs/maintenance.md](./docs/maintenance.md#full-load).
+      (d) Refresh the MEMORY.md reference memory
+      `Shared HF cache at /store/deepfold/huggingface` → `/gpfs/deepfold/model_cache`.
 - [ ] Output formats beyond A3M (Stockholm, paired variants).
-- [ ] OTalign real implementation (currently raises 501).
 - [ ] Backpressure: `503 Retry-After` when queue depth exceeds threshold.
 - [ ] Internal admin UI (HTML; the JSON API under `/admin/*` is the underlying transport).
-- [ ] External web frontend (submit-a-job page, thin client over `/v2/*`).
 - [ ] Sibling `plmmsa-examples` repo: ColabFold notebook + AlphaFold / OpenFold / Boltz / Protenix integration recipes.
-- [ ] GHCR image releases on tag (manual `docker push` until a CI
-      workflow is added back).
 - [ ] **Finish pLM-BLAST acceleration.** Numba-JIT landed for the DP
       fill (matches PLMAlign's 1 ms/target on small matrices), but a
       32-target benchmark with the thread-pool fanout took >5 min —
@@ -505,88 +547,6 @@ flavor (request + expected response) and replay through FastAPI's
       aggregate path. Requires a one-time offline pass over UniRef50 to
       produce per-sequence `.pt` files + an SQLite index; reuses the
       existing `ShardStore` reader unchanged.
-- [ ] **FlashSinkhorn — fused-kernel unbalanced Sinkhorn.**
-      Current state: `sinkhorn_torch.py` does the Sinkhorn iteration
-      in plain torch ops — one `log_softmax`-ish reduction per
-      dual-variable update, ~100 iterations per target, one torch
-      kernel launch per op. For the CASP15 k=1000 OTalign run
-      (1553 targets × 106-aa query), Phase 5 is ~24 s after the DP
-      JIT; profiling shows ~40% of that is CUDA kernel launch +
-      small-matrix allocator overhead, not math.
-
-      Design (mirrors the FlashAttention trick):
-      - One fused Triton / CUDA kernel per target: hold `C`, `f`,
-        `g` in SRAM; run the entire Sinkhorn loop (n_iter
-        iterations of log-space scaled updates) without returning
-        to HBM between iterations.
-      - Tiled along the `Lq × Lt` axis for queries / targets that
-        exceed SRAM. For our sizes (`Lq ≈ 100-300`, `Lt ≈ 100-400`)
-        the entire cost matrix fits in one SM's shared memory, so
-        tiling is only needed for pathological inputs.
-      - Batch the fused kernel over targets: one CUDA launch for
-        1553 targets instead of 1553 × n_iter launches. Uses
-        `torch.compile` with a custom op, or Triton directly.
-      - Keep fp32 — the precision argument in
-        `sinkhorn_torch.py` is unchanged (log-space residuals need
-        the range).
-
-      Expected payoff: Phase 5 OTalign 24 s → ~5-8 s at k=1000, based
-      on FlashAttention's typical 4-8× speedup on small-matrix /
-      kernel-launch-bound workloads. Validation: OTalign's transport
-      plan `P` should match the current torch implementation to
-      within 1e-4 (tighter than Sinkhorn's `tol=1e-4` default).
-
-      Dependencies: Triton 2.x (already pulled in via torch 2.8),
-      a GPU with CUDA compute capability ≥ 7.5 (RTX 6000 Ada is
-      8.9). Ship behind a `aligners.otalign.fused_sinkhorn = true`
-      settings flag so the torch fallback stays the default until
-      correctness is cross-validated on the CASP15 benchmark.
-
-      **Avoiding per-shape recompilation.** Triton JIT-compiles
-      once per distinct value of `tl.constexpr` kernel params, not
-      per input tensor shape. So the design has to pass `Lq, Lt`
-      as runtime `int` args (NOT `tl.constexpr`) — the kernel
-      handles arbitrary matrix sizes via boundary masks, and one
-      compile covers every job. Tile sizes `BLOCK_Q`, `BLOCK_T`
-      stay `constexpr` with a small fixed set (e.g., 128×128 and
-      128×256 for the two common aspect ratios). Optional
-      pad-to-bucket (round `Lq` / `Lt` up to a power of 2) if we
-      observe measurable tail-iteration divergence on the
-      boundary-masked path.
-
-      **Autotune on hidden (embedding) dimension.** The cost-matrix
-      construction `C = q @ t.T` has its hot axis on the shared K
-      dim = PLM hidden dim (ProtT5=1024, Ankh-Large=1536). Pick
-      block sizes differently for those two. Use
-      `@triton.autotune(configs=[Config(...), ...], key=["D"])`
-      with `D` as a runtime arg — Triton caches the best config
-      per observed D, so the first Ankh-Large call compiles once
-      (say 128×128×64) and every subsequent Ankh-Large OTalign
-      reuses it; same separately for ProtT5. Key the autotune on
-      D alone (NOT on Lq/Lt) so the cache stays small (one entry
-      per hidden dim, not per input shape).
-
-      **Validation sequence after implementation lands:**
-      1. **Micro-benchmark FlashSinkhorn in isolation.** Script
-         that times one OTalign pair at matrix sizes spanning the
-         CASP15 distribution (Lq ∈ {100, 200, 400, 800},
-         Lt = same set) + both hidden dims (1024 / 1536). Record
-         kernel time + a correctness check vs. the torch
-         Sinkhorn (max abs diff in `P` < 1e-4 per the design
-         tolerance). Land under `bench/flash_sinkhorn.py`.
-      2. **CASP15 end-to-end rerun.** Re-run the 6-job benchmark
-         (T1104 / T1120 / T1132 × plmalign / otalign) with
-         `aligners.otalign.fused_sinkhorn = true` and compare
-         Phase 5 timings against the current
-         numba-JIT-DP-only baseline. Expected: OTalign Phase 5
-         24 s → ~5-8 s at k=1000.
-      3. **Full regression run.** Drive
-         `bench/run_regression.py` on the complete CASP15 fixture
-         set, both aligners, paired + unpaired. Compare MSA
-         depth, composition, and identity bands against the
-         recorded baselines. Lands the new OTalign numbers in
-         `tests/fixtures/casp15/expected_stats.json` once verified.
-
 ## Open-source readiness
 
 - [x] `procl` reachable (vendored in `src/procl/`).

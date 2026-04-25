@@ -157,6 +157,11 @@ class RequestContextMiddleware:
         state = scope["state"]  # pyright: ignore[reportGeneralTypeIssues]
         state["request_id"] = request_id
         state["client_ip"] = _client_ip(scope)
+        # Bind the shared ContextVar so `httpx_headers_with_request_id`
+        # picks it up on outgoing internal calls (orchestrator, v2 _forward).
+        from plmmsa.request_context import bind_request_id as _bind
+
+        _bind(request_id)
 
         started = time.perf_counter()
         status_holder: dict[str, int] = {"status": 0}

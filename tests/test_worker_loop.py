@@ -3,9 +3,14 @@ from __future__ import annotations
 import pytest
 from fakeredis import FakeAsyncRedis
 
-from plmmsa.jobs import JobStatus, JobStore
+from plmmsa.jobs import JobStatus, JobStore, ResultCache
 from plmmsa.jobs.models import JobResult
 from plmmsa.worker.__main__ import _one_iteration
+
+# No-op cache shared by the loop-behavior tests — they exercise the
+# orchestrator + JobStore surface, not the cache. The result-cache
+# tests live in test_result_cache.py.
+_NO_CACHE = ResultCache(None, ttl_s=0)
 
 
 class _StubOrchestrator:
@@ -42,7 +47,7 @@ async def test_iteration_processes_queued_job(store: JobStore) -> None:
     orchestrator = _StubOrchestrator()
     job = await store.create({"sequences": ["MKT"], "model": "ankh_cl"})
 
-    did_work = await _one_iteration(store, orchestrator)  # pyright: ignore[reportArgumentType]
+    did_work = await _one_iteration(store, orchestrator, _NO_CACHE)  # pyright: ignore[reportArgumentType]
     assert did_work is True
 
     fetched = await store.get(job.id)
@@ -54,7 +59,7 @@ async def test_iteration_processes_queued_job(store: JobStore) -> None:
 
 async def test_iteration_returns_false_on_empty_queue(store: JobStore) -> None:
     orchestrator = _StubOrchestrator()
-    did_work = await _one_iteration(store, orchestrator)  # pyright: ignore[reportArgumentType]
+    did_work = await _one_iteration(store, orchestrator, _NO_CACHE)  # pyright: ignore[reportArgumentType]
     assert did_work is False
 
 
@@ -62,7 +67,7 @@ async def test_iteration_marks_failed_on_pipeline_exception(store: JobStore) -> 
     orchestrator = _BoomOrchestrator()
     job = await store.create({"sequences": ["MKT"]})
 
-    await _one_iteration(store, orchestrator)  # pyright: ignore[reportArgumentType]
+    await _one_iteration(store, orchestrator, _NO_CACHE)  # pyright: ignore[reportArgumentType]
 
     fetched = await store.get(job.id)
     assert fetched is not None
@@ -78,7 +83,7 @@ async def test_iteration_respects_cancellation_during_run(store: JobStore) -> No
     job = await store.create({"sequences": ["MKT"]})
     job_ref["id"] = job.id
 
-    await _one_iteration(store, orchestrator)  # pyright: ignore[reportArgumentType]
+    await _one_iteration(store, orchestrator, _NO_CACHE)  # pyright: ignore[reportArgumentType]
 
     fetched = await store.get(job.id)
     assert fetched is not None

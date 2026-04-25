@@ -18,11 +18,19 @@ services:
       ALIGN_URL: http://align:8083
       # Operational Redis (jobs + tokens + rate limits).
       CACHE_URL: redis://cache-ops:6379
+      # Result cache (completed-MSA cache on cache-emb). On submit, the
+      # api hashes a canonical form of the request and, on hit, synthesizes
+      # a succeeded Job without enqueueing. Worker writes on job success.
+      # Unset → cache disabled; every submit re-runs the pipeline.
+      PLMMSA_RESULT_CACHE_URL: ${PLMMSA_RESULT_CACHE_URL:-redis://cache-emb:6379}
+      PLMMSA_RESULT_CACHE_TTL_S: ${PLMMSA_RESULT_CACHE_TTL_S:-2592000}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
     depends_on:
       cache-ops:
+        condition: service_healthy
+      cache-emb:
         condition: service_healthy
       embedding:
         condition: service_healthy
@@ -32,7 +40,10 @@ services:
         condition: service_healthy
     networks: [plmmsa_net]
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      # Use /healthz (bare liveness). /health aggregates downstream state
+      # and can return `down` while compose is still bringing services up,
+      # which would cause spurious restarts during initial warmup.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -62,10 +73,6 @@ services:
       # stacking up across requests. Recommended by the CUDA OOM error
       # itself ("try setting expandable_segments:True to avoid fragmentation").
       PYTORCH_CUDA_ALLOC_CONF: ${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
-      # Embedding result cache (optional — if unset, every request re-encodes).
-      # Keyed by sha256(model, sequence); see src/plmmsa/embedding/server.py.
-      # PLMMSA_EMBEDDING_CACHE_URL: ${PLMMSA_EMBEDDING_CACHE_URL:-redis://cache-emb:6379}
-      # PLMMSA_EMBEDDING_CACHE_TTL_S: ${PLMMSA_EMBEDDING_CACHE_TTL_S:-2592000}
       # Optional Redis-backed shard path index. When set, `/embed_by_id/bin`
       # resolves filename → folder via MGET instead of the /gpfs-hosted
       # sqlite `index.db`. ~300x faster on cold cache. Populate once via
@@ -92,7 +99,12 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
       interval: 10s
-      timeout: 5s
+      # 30 s timeout (was 5 s): when the GPU is mid-`/embed/bin` for a
+      # large target batch, an /health probe queues behind it on the
+      # event loop and a tight 5 s cap flapped the container unhealthy
+      # under heavy load. The endpoint itself is fast; this is purely
+      # head-of-line buffering.
+      timeout: 30s
       retries: 30
       start_period: 5m
     deploy:
@@ -178,6 +190,12 @@ services:
   # Small working set, crash-safety matters → AOF on, no RDB, noeviction.
   cache-ops:
     image: redis:7.4-alpine
+    # REDIS_CONTAINER_USER lets hosts pin the container's uid/gid so the RDB
+    # and AOF files on disk are owned by a real host account instead of the
+    # image default (uid 999). On `deepfold` the host `.env` sets
+    # `REDIS_CONTAINER_USER=220104:220104` so files persist as
+    # `deepfold:deepfold`. Unset / dev hosts get the image default.
+    user: "${REDIS_CONTAINER_USER:-999:999}"
     command: >
       redis-server
       --appendonly yes
@@ -198,6 +216,7 @@ services:
   # RDB only, no AOF, noeviction by default (cap with --maxmemory if needed).
   cache-seq:
     image: redis:7.4-alpine
+    user: "${REDIS_CONTAINER_USER:-999:999}"
     command: >
       redis-server
       --appendonly no
@@ -217,6 +236,7 @@ services:
   # Hot, rebuildable (just re-embed) → RDB snapshots + LRU eviction, capped.
   cache-emb:
     image: redis:7.4-alpine
+    user: "${REDIS_CONTAINER_USER:-999:999}"
     command: >
       redis-server
       --appendonly no
@@ -250,14 +270,72 @@ services:
     networks: [plmmsa_net]
     restart: unless-stopped
 
+  # Prometheus scrape target. Off by default; opt in with
+  #   docker compose --profile observability up -d prometheus
+  # then open http://localhost:${PROMETHEUS_HOST_PORT:-9091}.
+  # The scrape config in services/prometheus/prometheus.yml hits every
+  # plmMSA HTTP service plus the worker's embedded :9090. All targets
+  # are bridge-only — Prometheus joins plmmsa_net to reach them.
+  # NVIDIA DCGM exporter — Prometheus-format GPU telemetry
+  # (utilization, memory, temperature, power, ECC errors, NVLink).
+  # Off by default; opt in with the same `observability` profile that
+  # turns on Prometheus. Joins `plmmsa_net` so prometheus can reach it
+  # by service name; no host port published. Requires
+  # `nvidia-container-toolkit` (same toolkit the embedding service
+  # already needs).
+  dcgm-exporter:
+    image: nvidia/dcgm-exporter:latest
+    profiles: [observability]
+    cap_add: [SYS_ADMIN]
+    networks: [plmmsa_net]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu, utility]
+              count: all
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [observability]
+    # Run as the host user so $PROMETHEUS_DATA_DIR (auto-created by
+    # compose's `create_host_path: true` as root) is owned by an account
+    # we control. Same pattern as REDIS_CONTAINER_USER on the cache-*
+    # services. Default `nobody:nogroup` matches the image's stock uid;
+    # operator hosts that want their own ownership set
+    # `PROMETHEUS_CONTAINER_USER=$(id -u):$(id -g)` in .env. (On
+    # `deepfold` set 220104:220104 to match the redis services.)
+    user: "${PROMETHEUS_CONTAINER_USER:-65534:65534}"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+    ports:
+      # Host:9091 → container:9090. We avoid host:9090 because the
+      # worker's embedded scrape target also listens on :9090 inside its
+      # container; if a future change publishes that port to the host,
+      # there'd be a clash.
+      - "${PROMETHEUS_HOST_PORT:-9091}:9090"
+    volumes:
+      - ./services/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./services/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ${PROMETHEUS_DATA_DIR:-./prometheus_data}:/prometheus
+    networks: [plmmsa_net]
+    restart: unless-stopped
+
   worker:
     build:
       context: .
       dockerfile: services/worker/Dockerfile
     environment:
       PLMMSA_SETTINGS_FILE: /app/settings.toml
-      # Worker reads jobs from cache-ops and fetches sequences / tax / embed
-      # hits from cache-seq / cache-emb. Separate URLs per role.
+      # Worker reads jobs from cache-ops and fetches sequences / tax from
+      # cache-seq. cache-emb is reserved for the forthcoming result cache
+      # (PLAN.md deferred); no worker-side reader today.
       CACHE_URL: redis://cache-ops:6379
       EMBEDDING_URL: http://embedding:8081
       VDB_URL: http://vdb:8082
@@ -266,12 +344,19 @@ services:
       PLMMSA_SEQUENCE_REDIS_URL: ${PLMMSA_SEQUENCE_REDIS_URL:-redis://cache-seq:6379}
       PLMMSA_SEQUENCE_KEY_FORMAT: ${PLMMSA_SEQUENCE_KEY_FORMAT:-seq:{id}}
       PLMMSA_TAX_KEY_FORMAT: ${PLMMSA_TAX_KEY_FORMAT:-tax:{id}}
-      # Embedding result cache.
-      PLMMSA_EMB_REDIS_URL: ${PLMMSA_EMB_REDIS_URL:-redis://cache-emb:6379}
+      # Result cache — worker writes on job success so the next identical
+      # submission is served directly by the api without re-queueing.
+      PLMMSA_RESULT_CACHE_URL: ${PLMMSA_RESULT_CACHE_URL:-redis://cache-emb:6379}
+      PLMMSA_RESULT_CACHE_TTL_S: ${PLMMSA_RESULT_CACHE_TTL_S:-2592000}
       # Comma-separated PLM ids whose target embeddings the orchestrator
       # should fetch via /embed_by_id (shard store) before falling back to
       # /embed. Empty / unset = today's behavior (every target re-embedded).
       PLMMSA_SHARD_MODELS: ${PLMMSA_SHARD_MODELS:-}
+      # Prometheus scrape target for the worker. The worker has no ASGI
+      # surface, so an embedded prometheus_client http server binds on
+      # this port (inside the container, on plmmsa_net only — not
+      # published to the host). Unset → metrics server disabled.
+      PLMMSA_WORKER_METRICS_PORT: ${PLMMSA_WORKER_METRICS_PORT:-9090}
     volumes:
       - ./settings.toml:/app/settings.toml:ro
     depends_on:

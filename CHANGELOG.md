@@ -86,3 +86,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ratelimit.per_ip_rpm` default raised 30 → 60. The 30-rpm cap was
   hitting active clients on legitimate retry + polling traffic.
+
+### Added (infra + observability round)
+
+- **Per-service Prometheus `/metrics`.** The `MetricsMiddleware` + counters
+  moved out of `plmmsa.api.metrics` into a shared `plmmsa.metrics`
+  module. Every http-serving service (api / embedding / vdb / align)
+  now mounts the same middleware + `/metrics` router with a
+  `service="..."` label on every sample. Worker gets an embedded
+  `prometheus_client.start_http_server` on `PLMMSA_WORKER_METRICS_PORT`
+  (default 9090) exposing three worker-specific metrics:
+  `plmmsa_worker_jobs_processed_total{status}`,
+  `plmmsa_worker_pipeline_duration_seconds`,
+  `plmmsa_worker_queue_depth` (sampled every 5 s from
+  `LLEN plmmsa:queue`). Sidecar ports are bridge-only; scrape from a
+  container on `plmmsa_net`.
+- **Aggregated `/health` on api.** Fans out to `embedding`, `vdb`,
+  `align` `/health` (2 s per-probe, 3 s overall cap) and PINGs every
+  Redis role. Returns a per-service readiness map; overall status is
+  `ok` only when every downstream is ok. Cached for ~1.5 s via an
+  `asyncio.Lock`-guarded TTL so a burst of polls doesn't fan six
+  probes per request. Bare `/healthz` is kept (and is now what the
+  compose healthcheck hits) so downstream warmup can't cause compose
+  to restart api.
+- **Completed-MSA result cache** on `cache-emb`. Keyed by
+  `sha256` of the canonicalized submit body (sequences normalized to
+  uppercase + whitespace-stripped, chain order preserved,
+  non-output-affecting fields like `force_recompute` and
+  `request_id` dropped); value is the canonical A3M result. api
+  checks the cache on submit and, on hit, synthesizes a `succeeded`
+  Job record and returns its id without touching the queue
+  (`result.stats.cache_hit = true`). Worker writes on job success
+  best-effort (never fails the job on a cache outage). Clients can
+  bypass with `{"force_recompute": true}`. Operator knobs:
+  `PLMMSA_RESULT_CACHE_URL` (default `redis://cache-emb:6379`),
+  `PLMMSA_RESULT_CACHE_TTL_S` (default 30 days).
+- **Per-sidecar request-id middleware** on embedding / vdb / align.
+  Adopt the api-supplied `X-Request-ID` (or mint one), bind it to a
+  `ContextVar`, echo it on the response, and emit a structured
+  access-log line under `plmmsa.access.{service}`. `api` now threads
+  the id onto every downstream httpx call (already did on
+  `/v2/embed|/search|/align`; now also from the orchestrator's
+  internal calls). api also stamps `request_id` onto the Job
+  payload; worker rebinds it on job claim so the orchestrator's
+  httpx client carries it end-to-end. `request_id` is excluded from
+  idempotency and result-cache key hashing so retries still dedup.
+- **CSV ingestion for `build_sequence_cache`.** New `--csv` /
+  `--csv-dir` modes that stream `uniref50_t5/split/*.csv` (columns
+  `accession, description, sequence, length, length_group`) into
+  `cache-seq`. TaxID is extracted from `description` via the same
+  regex used on FASTA headers. `--start` / `--stop` slice the sorted
+  file list for resume. `build_from_fasta` kept as a compat shim.
+- **Redis container uid override.** New `REDIS_CONTAINER_USER` env
+  (default `999:999`) on the three `cache-*` services in
+  `docker-compose.yml`. On `deepfold` the host `.env` sets
+  `220104:220104` so RDB/AOF files on
+  `/gpfs/deepfold/service/cache_*_data` are owned by `deepfold:deepfold`.
+- **Exception logging policy across services.** Every PlmMSAError
+  handler (api / embedding / vdb / align) now logs with
+  `logger.exception` on 5xx (full traceback) and `logger.warning` on
+  4xx (code + message only), tagged with method + path. Orchestrator
+  + shard-store fallbacks add `exc_info=True` so silent per-model /
+  Redis failures carry tracebacks.
+- **Host-path migration off `/store` onto `/gpfs`** (on the
+  `deepfold` host). `.env` now points
+  `MODEL_CACHE_DIR=/gpfs/deepfold/model_cache` and
+  `CACHE_*_DATA_DIR=/gpfs/deepfold/service/cache_{ops,seq,emb}_data`
+  (correct `service` spelling). `.env.example` gains the
+  `REDIS_CONTAINER_USER`, `PLMMSA_RESULT_CACHE_URL`, and
+  `PLMMSA_RESULT_CACHE_TTL_S` knobs.
+
+### Removed (infra + observability round)
+
+- **Dead per-residue embedding cache** branch in
+  `plmmsa.embedding.server`. The `PLMMSA_EMBEDDING_CACHE_URL` path
+  was disabled in a prior commit because 256-seq pipelines of
+  pickled tensors overflowed the redis-py client buffer. The
+  `cache-emb` container is now repurposed for the result cache
+  (above); the dead code path, `hashlib`/`pickle` imports, and the
+  `tests/test_embedding_cache.py` fixture are gone.

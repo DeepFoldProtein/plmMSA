@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import hashlib
 import logging
 import os
-import pickle
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -140,15 +138,6 @@ def create_app(
     else:
         shard_stores = _build_shard_stores(settings)
 
-    cache_url = os.environ.get("PLMMSA_EMBEDDING_CACHE_URL")
-    cache_client: Any | None = None
-    cache_ttl_s = int(os.environ.get("PLMMSA_EMBEDDING_CACHE_TTL_S", str(60 * 60 * 24 * 30)))
-    if cache_url:
-        from redis.asyncio import Redis as _Redis
-
-        cache_client = _Redis.from_url(cache_url, decode_responses=False)
-        logger.info("embedding cache enabled at %s (ttl %ds)", cache_url, cache_ttl_s)
-
     empty_cache_after = settings.embedding.empty_cache_after_request
     if empty_cache_after:
         logger.info(
@@ -179,12 +168,40 @@ def create_app(
         redoc_url="/redoc" if settings.api.openapi_public else None,
         lifespan=_lifespan,
     )
+    from plmmsa.request_context import RequestContextMiddleware
+
+    app.add_middleware(RequestContextMiddleware, service="embedding")
+
+    from plmmsa.metrics import MetricsMiddleware
+    from plmmsa.metrics import router as metrics_router
+
+    app.add_middleware(MetricsMiddleware, service="embedding")
+    app.include_router(metrics_router)
 
     logger.info("embedding server: backends loaded = %s", sorted(backends.keys()))
     logger.info("embedding server: shard stores = %s", sorted(shard_stores.keys()))
 
     @app.exception_handler(PlmMSAError)
-    async def _err(_: Request, exc: PlmMSAError) -> JSONResponse:
+    async def _err(request: Request, exc: PlmMSAError) -> JSONResponse:
+        # 5xx (GPU OOM, internal) → full traceback; 4xx → warning only.
+        if exc.http_status >= 500:
+            logger.exception(
+                "embedding: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
+        else:
+            logger.warning(
+                "embedding: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
         return JSONResponse(
             status_code=exc.http_status,
             content=exc.as_response().model_dump(mode="json"),
@@ -212,10 +229,14 @@ def create_app(
         return HealthResponse(status="ok", service="embedding", models=models)
 
     async def _resolve_embeddings(model: str, sequences: list[str]) -> tuple[list[Any], int]:
-        """Cache-aware embedding resolution shared by `/embed` and
-        `/embed/bin`. Returns `(per_seq_tensors_in_input_order, dim)`.
-        Each item is either a `torch.Tensor` (fresh encode, CPU) or
-        whatever the cache unpickled (also a torch.Tensor in practice).
+        """Resolve per-residue embeddings for `sequences` under `model`.
+
+        Returns `(per_seq_tensors_in_input_order, dim)`. Each item is a
+        `torch.Tensor` on CPU. No per-residue caching — the previous
+        Redis-backed cache was removed after 256-seq pipelines of
+        pickled tensors overflowed the client buffer; the ProtT5 shard
+        store already covers the hot repeat-target path, and any
+        remaining cache wins land in the result-cache tier instead.
         """
         backend = backends.get(model)
         if backend is None:
@@ -225,60 +246,24 @@ def create_app(
                 http_status=400,
                 detail={"requested": model, "available": sorted(backends.keys())},
             )
-
-        resolved: list[Any] = [None] * len(sequences)
-        miss_positions: list[int] = []
-        miss_seqs: list[str] = []
-        if cache_client is not None:
-            keys = [_cache_key(model, s) for s in sequences]
-            cached = await cache_client.mget(keys)
-            for i, blob in enumerate(cached):
-                if blob is None:
-                    miss_positions.append(i)
-                    miss_seqs.append(sequences[i])
-                else:
-                    try:
-                        resolved[i] = pickle.loads(blob)
-                    except Exception:
-                        logger.exception("cache decode failed; re-encoding")
-                        miss_positions.append(i)
-                        miss_seqs.append(sequences[i])
-        else:
-            miss_positions = list(range(len(sequences)))
-            miss_seqs = sequences
-
-        if miss_seqs:
-            try:
-                tensors = backend.encode(miss_seqs)
-            except Exception as exc:
-                logger.exception("embed failed for model=%s", model)
-                if _is_cuda_oom(exc):
-                    raise PlmMSAError(
-                        "GPU out of memory while encoding.",
-                        code=ErrorCode.GPU_OOM,
-                        http_status=503,
-                        detail={"model": model, "cause": str(exc)[:200]},
-                    ) from exc
-                raise
-            for pos, arr in zip(miss_positions, tensors, strict=True):
-                resolved[pos] = arr
-            if cache_client is not None:
-                pipe = cache_client.pipeline()
-                for pos, arr in zip(miss_positions, tensors, strict=True):
-                    pipe.set(
-                        _cache_key(model, sequences[pos]),
-                        pickle.dumps(arr),
-                        ex=cache_ttl_s,
-                    )
-                await pipe.execute()
-
-        if any(a is None for a in resolved):
-            raise PlmMSAError(
-                "Embedding resolution mismatch.",
-                code=ErrorCode.INTERNAL,
-                http_status=500,
+        try:
+            tensors = backend.encode(sequences)
+        except Exception as exc:
+            logger.exception(
+                "embed failed: model=%s n_sequences=%d lengths=%s",
+                model,
+                len(sequences),
+                [len(s) for s in sequences[:8]],
             )
-        return resolved, backend.dim
+            if _is_cuda_oom(exc):
+                raise PlmMSAError(
+                    "GPU out of memory while encoding.",
+                    code=ErrorCode.GPU_OOM,
+                    http_status=503,
+                    detail={"model": model, "cause": str(exc)[:200]},
+                ) from exc
+            raise
+        return list(tensors), backend.dim
 
     @app.post("/embed", response_model=EmbedResponse, tags=["embedding"])
     async def embed(req: EmbedRequest) -> EmbedResponse:
@@ -440,15 +425,6 @@ def _is_cuda_oom(exc: BaseException) -> bool:
     return "out of memory" in msg or "cuda oom" in msg
 
 
-def _cache_key(model: str, sequence: str) -> str:
-    h = hashlib.sha256()
-    h.update(model.encode())
-    h.update(b"\x00")
-    h.update(sequence.encode())
-    return f"emb:{model}:{h.hexdigest()}"
-
-
 # Module-level `app` is NOT created here — use `create_app` via uvicorn's
 # --factory flag (see `plmmsa/embedding/__main__.py`) so tests and dry-runs do
 # not trigger multi-GB model downloads just to import the module.
-def _unused(_: Any) -> None: ...

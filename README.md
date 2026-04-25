@@ -79,7 +79,8 @@ got dropped by the Algorithm 1 step 5 filter.
 cp .env.example .env                      # edit for your host
 cp settings.example.toml settings.toml
 ./bin/up.sh
-curl http://localhost:8080/health
+curl http://localhost:8080/healthz         # bare liveness
+curl http://localhost:8080/health          # aggregated readiness (all downstreams)
 curl http://localhost:8080/v2/version
 ```
 
@@ -118,9 +119,25 @@ and Ankh-Large shard store are on the roadmap.
 
 ## Observability
 
-- Structured JSON logs (`plmmsa.access`, `plmmsa.audit`, service loggers)
-- `X-Request-ID` stamped on every response and forwarded to sidecars
-- Prometheus `/metrics` exposing request count, latency, in-flight gauge
+- Structured JSON logs across every service (`plmmsa.access`,
+  `plmmsa.access.{embedding,vdb,align}`, `plmmsa.audit`, per-service
+  error loggers). 5xx errors carry the full traceback; 4xx log as
+  warnings with method / path / code.
+- `X-Request-ID` end-to-end: stamped by api on entry, echoed on every
+  response, threaded to embedding / vdb / align on api's internal
+  calls, and rebound on the worker when a job is claimed so the
+  orchestrator's downstream calls carry the same id. Grep one trace
+  with `docker compose logs ... | jq 'select(.request_id == "<rid>")'`.
+- Aggregated `/health` fans out to each downstream (HTTP + Redis
+  ping) and reports per-service readiness; `/healthz` stays a bare
+  liveness probe for compose / CF edge.
+- Prometheus `/metrics` on api (request count, latency, in-flight
+  gauge). Per-service metrics on embedding/vdb/align/worker is a
+  deferred follow-up (see [`PLAN.md`](./PLAN.md)).
+- Completed MSAs are cached on `cache-emb` keyed by a canonical
+  submit hash — repeat submissions return immediately with
+  `result.stats.cache_hit = true`. Clients can opt out with
+  `{"force_recompute": true}` on `POST /v2/msa`.
 
 ## License
 

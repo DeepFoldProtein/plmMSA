@@ -126,7 +126,16 @@ class Orchestrator:
     def _new_client(self) -> httpx.AsyncClient:
         if self._client_factory is not None:
             return self._client_factory()
-        return httpx.AsyncClient(timeout=self._config.http_timeout)
+        # Client-level headers: carries X-Request-ID onto every outgoing
+        # call if the context has one bound (worker sets it on job claim).
+        # httpx merges these with per-call `headers=` dicts, so the
+        # per-call overrides (e.g. Content-Type for binary frames) still win.
+        from plmmsa.request_context import httpx_headers_with_request_id
+
+        return httpx.AsyncClient(
+            timeout=self._config.http_timeout,
+            headers=httpx_headers_with_request_id(),
+        )
 
     async def run(self, request: dict[str, Any]) -> JobResult:
         cfg = self._config
@@ -377,7 +386,7 @@ class Orchestrator:
             # A single model's failure should not nuke the whole request when
             # we're running multiple — record the error and let the union
             # return whatever other models produced.
-            logger.warning("model %s pipeline failed: %s", model, exc)
+            logger.warning("model %s pipeline failed: %s", model, exc, exc_info=True)
             return _PerModelResult(
                 model=model,
                 collection=collection,
@@ -535,7 +544,7 @@ class Orchestrator:
                     neighbors = await self._search(http, collection, q_emb, k)
                     return rm, collection, neighbors, None
                 except Exception as exc:
-                    logger.warning("retrieval model %s failed: %s", rm, exc)
+                    logger.warning("retrieval model %s failed: %s", rm, exc, exc_info=True)
                     return rm, collection, None, str(exc)[:200]
 
             score_query_task = asyncio.create_task(self._embed_query(http, score_model, query_seq))

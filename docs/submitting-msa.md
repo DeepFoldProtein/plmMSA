@@ -138,6 +138,7 @@ Response (`202 Accepted`):
 | `score_model`   | no       | aligner default      | PLM used to build the score matrix. `plmalign`/`plm_blast` default to `prott5` (shard store); `otalign` defaults to `ankh_large` (live re-embed). Pass `""` to disable cross-PLM scoring. |
 | `filter_by_score` | no     | `true`               | Apply Algorithm 1 step 5 filter: drop hits with score below `min(0.2·len(Q), 8.0)`. Per-aligner enable is in `[aligners.*].filter_enabled` — OTalign is off because its transport-mass score lives on a different scale. Per-request `false` always wins. |
 | `options`       | no       | `{}`                 | Aligner kwargs: `gap_open`, `gap_extend`, `normalize`, ...                            |
+| `force_recompute` | no     | `false`              | Bypass the completed-MSA result cache and always run the pipeline. On success the fresh result still overwrites the cache entry. Useful for reproducing or retrying after a pipeline change. |
 
 **How multi-model aggregation works.** Each model runs its own pipeline
 (embed → search → fetch → embed targets → align) in parallel. After all
@@ -159,6 +160,7 @@ returns whatever the surviving models produced.
 | `filter_by_score`  | Request-level flag (`filter_by_score` field on the submit).              |
 | `filter_applied`   | `true` only when both the request flag and the aligner's `filter_enabled` are true. |
 | `filter_threshold` | `min(0.2 · len(Q), 8.0)` — same scale as hit scores.                    |
+| `cache_hit`        | `true` when the server served this MSA from the result cache (`cache-emb`) instead of running the pipeline. Absent on fresh compute. The job record's `started_at` and `finished_at` collapse to the same timestamp on a hit. |
 
 A3M rows carry the raw alignment score in the FASTA header
 (`>target_id   123.456`), so you can sort or re-filter client-side.

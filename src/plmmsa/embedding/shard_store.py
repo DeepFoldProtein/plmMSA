@@ -220,7 +220,9 @@ class ShardStore:
         try:
             client = await self._get_async_redis()
         except Exception as exc:
-            logger.warning("shard_store: async redis client unavailable: %s", exc)
+            logger.warning(
+                "shard_store: async redis client unavailable: %s", exc, exc_info=True
+            )
             return {}
 
         bare_ids = [self._bare_id(i) for i in ids]
@@ -228,7 +230,12 @@ class ShardStore:
         try:
             values = await client.mget(keys)
         except Exception as exc:
-            logger.warning("shard_store: redis MGET failed: %s", exc)
+            logger.warning(
+                "shard_store: redis MGET failed (%d keys): %s",
+                len(keys),
+                exc,
+                exc_info=True,
+            )
             return {}
 
         out: dict[str, str] = {}
@@ -328,7 +335,12 @@ class ShardStore:
             uri = f"file:{self._index_db}?mode=ro&immutable=1"
             conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
         except sqlite3.Error as exc:
-            logger.warning("shard_store: sqlite open failed: %s", exc)
+            logger.warning(
+                "shard_store: sqlite open failed (%s): %s",
+                self._index_db,
+                exc,
+                exc_info=True,
+            )
             return out
         try:
             conn.execute("PRAGMA query_only=ON")
@@ -342,7 +354,12 @@ class ShardStore:
                 for fp, folder in rows:
                     out[fp] = folder
         except sqlite3.Error as exc:
-            logger.warning("shard_store: sqlite query failed: %s", exc)
+            logger.warning(
+                "shard_store: sqlite query failed (%d filenames): %s",
+                len(filenames),
+                exc,
+                exc_info=True,
+            )
         finally:
             conn.close()
         return out

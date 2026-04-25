@@ -60,6 +60,19 @@ def create_app(*, collections_override: dict[str, VDB] | None = None) -> FastAPI
         docs_url="/docs" if settings.api.openapi_public else None,
         redoc_url="/redoc" if settings.api.openapi_public else None,
     )
+    # Adopt the api-provided X-Request-ID (or mint one) so sidecar access
+    # logs can be correlated end-to-end with the edge.
+    from plmmsa.request_context import RequestContextMiddleware
+
+    app.add_middleware(RequestContextMiddleware, service="vdb")
+
+    # Prometheus /metrics — same shape as api's, with `service="vdb"`
+    # so one dashboard can filter across services.
+    from plmmsa.metrics import MetricsMiddleware
+    from plmmsa.metrics import router as metrics_router
+
+    app.add_middleware(MetricsMiddleware, service="vdb")
+    app.include_router(metrics_router)
 
     collections = (
         dict(collections_override)
@@ -69,7 +82,25 @@ def create_app(*, collections_override: dict[str, VDB] | None = None) -> FastAPI
     logger.info("vdb server: collections loaded = %s", sorted(collections.keys()))
 
     @app.exception_handler(PlmMSAError)
-    async def _err(_: Request, exc: PlmMSAError) -> JSONResponse:
+    async def _err(request: Request, exc: PlmMSAError) -> JSONResponse:
+        if exc.http_status >= 500:
+            logger.exception(
+                "vdb: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
+        else:
+            logger.warning(
+                "vdb: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
         return JSONResponse(
             status_code=exc.http_status,
             content=exc.as_response().model_dump(mode="json"),

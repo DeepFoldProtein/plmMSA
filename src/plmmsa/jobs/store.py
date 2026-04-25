@@ -43,6 +43,17 @@ class JobStore:
         await self.redis.rpush(self.queue_key, job.id)  # pyright: ignore[reportGeneralTypeIssues]
         return job
 
+    async def insert_terminal(self, job: Job) -> None:
+        """Persist a pre-built terminal job *without* enqueueing it.
+
+        Used by the result-cache hot path: on cache hit the api
+        synthesizes a succeeded Job locally and only needs it visible
+        to `GET /v2/msa/{id}` — worker should never see it.
+        """
+        if not job.is_terminal():
+            raise ValueError(f"insert_terminal requires a terminal job; got {job.status}")
+        await self._save(job)
+
     async def mark_running(self, job_id: str) -> Job | None:
         job = await self.get(job_id)
         if job is None:

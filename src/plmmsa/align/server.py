@@ -188,6 +188,15 @@ def create_app(*, aligners_override: dict[str, Aligner] | None = None) -> FastAP
         docs_url="/docs" if settings.api.openapi_public else None,
         redoc_url="/redoc" if settings.api.openapi_public else None,
     )
+    from plmmsa.request_context import RequestContextMiddleware
+
+    app.add_middleware(RequestContextMiddleware, service="align")
+
+    from plmmsa.metrics import MetricsMiddleware
+    from plmmsa.metrics import router as metrics_router
+
+    app.add_middleware(MetricsMiddleware, service="align")
+    app.include_router(metrics_router)
 
     aligners = (
         dict(aligners_override)
@@ -198,7 +207,25 @@ def create_app(*, aligners_override: dict[str, Aligner] | None = None) -> FastAP
     _warmup_fused_sinkhorn(settings)
 
     @app.exception_handler(PlmMSAError)
-    async def _err(_: Request, exc: PlmMSAError) -> JSONResponse:
+    async def _err(request: Request, exc: PlmMSAError) -> JSONResponse:
+        if exc.http_status >= 500:
+            logger.exception(
+                "align: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
+        else:
+            logger.warning(
+                "align: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
         return JSONResponse(
             status_code=exc.http_status,
             content=exc.as_response().model_dump(mode="json"),

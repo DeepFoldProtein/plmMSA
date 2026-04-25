@@ -1,0 +1,59 @@
+# Prometheus scrape config for the plmMSA stack.
+#
+# All targets are reachable on the `plmmsa_net` bridge by service name;
+# no host-port publishing required for the targets themselves. The api
+# is also accessible at the host port (default 8080) but we scrape via
+# the bridge for consistency.
+#
+# Bring up with:
+#   docker compose --profile observability up -d prometheus
+# Open http://localhost:${PROMETHEUS_HOST_PORT:-9091}.
+#
+# To stop scraping a service (e.g. for an isolated reproducer), comment
+# the corresponding target out and `docker compose restart prometheus`.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    deployment: plmmsa
+
+# Alerting rule files. See alerts.yml for the rule definitions and
+# severity tiers. Without an Alertmanager configured below, alerts
+# only surface at /alerts and via the `ALERTS{...}` time series — they
+# don't notify anyone.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Alertmanager wiring — uncomment + configure when you want
+# notifications routed somewhere (slack/email/opsgenie/...).
+#
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: plmmsa
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - api:8080
+          - embedding:8081
+          - vdb:8082
+          - align:8083
+          - worker:9090
+        labels:
+          stack: plmmsa
+
+  # NVIDIA DCGM exporter — GPU telemetry. Only present when the
+  # `observability` profile is active (same profile that runs
+  # prometheus). DCGM exposes ~50 metrics named DCGM_FI_DEV_*; the
+  # interesting ones are GPU_UTIL, MEM_COPY_UTIL, FB_USED, FB_FREE,
+  # GPU_TEMP, POWER_USAGE, NVLINK_*, ECC_*.
+  - job_name: dcgm
+    metrics_path: /metrics
+    static_configs:
+      - targets: [dcgm-exporter:9400]
+        labels:
+          stack: plmmsa

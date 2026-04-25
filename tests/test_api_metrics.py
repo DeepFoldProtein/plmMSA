@@ -33,5 +33,6 @@ def test_metrics_counter_increments(client: TestClient) -> None:
         resp = c.get("/metrics")
     body = resp.text
     # The counter line we want looks like:
-    #   plmmsa_http_requests_total{method="GET",route="/v2/version",status="200"} 1.0
+    #   plmmsa_http_requests_total{method="GET",route="/v2/version",service="api",status="200"} 1.0
     assert 'route="/v2/version"' in body
+    assert 'service="api"' in body

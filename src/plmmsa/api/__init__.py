@@ -16,8 +16,8 @@ from plmmsa import __version__
 from plmmsa.admin.routes import router as admin_router
 from plmmsa.admin.tokens import TokenStore
 from plmmsa.api.health import router as health_router
-from plmmsa.api.metrics import MetricsMiddleware
-from plmmsa.api.metrics import router as metrics_router
+from plmmsa.metrics import MetricsMiddleware
+from plmmsa.metrics import router as metrics_router
 from plmmsa.api.middleware import (
     BodySizeLimitMiddleware,
     RateLimitMiddleware,
@@ -87,19 +87,42 @@ def create_app() -> FastAPI:
         allow_methods=settings.cors.allow_methods,
         allow_headers=settings.cors.allow_headers,
     )
-    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(MetricsMiddleware, service="api")
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.limits.max_body_bytes)
     app.add_middleware(
         RateLimitMiddleware,
         per_ip_rpm=settings.ratelimit.per_ip_rpm,
         per_token_rpm_default=settings.ratelimit.per_token_rpm,
         bootstrap_token=os.environ.get("ADMIN_TOKEN") or None,
-        exempt_paths=("/healthz", "/readyz", "/metrics", "/v2/version"),
+        exempt_paths=("/health", "/healthz", "/readyz", "/metrics", "/v2/version"),
     )
     app.add_middleware(RequestContextMiddleware, header=settings.logging.request_id_header)
 
     @app.exception_handler(PlmMSAError)
-    async def plmmsa_error_handler(_: Request, exc: PlmMSAError) -> JSONResponse:
+    async def plmmsa_error_handler(request: Request, exc: PlmMSAError) -> JSONResponse:
+        # 5xx → full traceback; 4xx → warning with code/message only (client
+        # errors aren't actionable on the server side). Request path gives
+        # operators context when correlating with the rate-limiter / access
+        # logs.
+        _log = logging.getLogger("plmmsa.api.error")
+        if exc.http_status >= 500:
+            _log.exception(
+                "api: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
+        else:
+            _log.warning(
+                "api: %s %s → %d %s: %s",
+                request.method,
+                request.url.path,
+                exc.http_status,
+                exc.code.value if hasattr(exc.code, "value") else exc.code,
+                exc.message,
+            )
         return JSONResponse(
             status_code=exc.http_status,
             content=exc.as_response().model_dump(mode="json"),

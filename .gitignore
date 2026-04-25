@@ -7,12 +7,17 @@ settings.toml.*
 # Internal design doc — kept out of the public repo.
 CLAUDE.md
 
-# Bind-mount artifacts managed by docker-compose. Default host paths for
-# MODEL_CACHE_DIR / VDB_DATA_DIR / CACHE_DATA_DIR when left relative.
+# Bind-mount artifacts managed by docker-compose. Default host paths
+# for MODEL_CACHE_DIR / VDB_DATA_DIR / CACHE_*_DATA_DIR /
+# PROMETHEUS_DATA_DIR when left relative.
 redis_data/
 model_cache/
 vdb_data/
 cache_data/
+cache_ops_data/
+cache_seq_data/
+cache_emb_data/
+prometheus_data/
 
 # Python
 __pycache__/

@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
+import uuid
 from typing import Any
 
 import httpx
@@ -16,14 +18,21 @@ from plmmsa.api.auth import require_admin_token
 from plmmsa.api.middleware import audit_event
 from plmmsa.config import get_settings
 from plmmsa.errors import ErrorCode, PlmMSAError
-from plmmsa.jobs import JobStore
+from plmmsa.jobs import JobStore, ResultCache
+from plmmsa.jobs.models import Job, JobStatus
 
 _IDEMPOTENCY_TTL_S = 600  # 10 min — long enough to de-dupe retries, short
 # enough that tuning a submission isn't blocked.
 
+# Result-cache TTL default: 30 days. Stored entries are also governed by
+# cache-emb's `allkeys-lru` + `CACHE_EMB_MAXMEMORY` eviction, so this is a
+# ceiling, not a floor.
+_RESULT_CACHE_TTL_S_DEFAULT = 30 * 24 * 60 * 60
+
 router = APIRouter(tags=["v2"])
 
 _job_store: JobStore | None = None
+_result_cache: ResultCache | None = None
 
 
 async def _get_job_store() -> JobStore:
@@ -34,6 +43,23 @@ async def _get_job_store() -> JobStore:
         cache_url = os.environ.get("CACHE_URL", "redis://cache:6379")
         _job_store = JobStore(Redis.from_url(cache_url, decode_responses=False))
     return _job_store
+
+
+async def _get_result_cache() -> ResultCache:
+    """Lazy singleton for the MSA result cache on ``cache-emb``.
+
+    Production sets ``PLMMSA_RESULT_CACHE_URL`` to ``redis://cache-emb:6379``.
+    Leaving it unset disables the cache (get/set become no-ops) so the
+    test harness and non-docker dev loops don't need a second Redis.
+    Tests can override via ``plmmsa.api.routes.v2._result_cache = <fake>``.
+    """
+    global _result_cache
+    if _result_cache is None:
+        url = os.environ.get("PLMMSA_RESULT_CACHE_URL")
+        ttl_s = int(os.environ.get("PLMMSA_RESULT_CACHE_TTL_S", _RESULT_CACHE_TTL_S_DEFAULT))
+        client = Redis.from_url(url, decode_responses=False) if url else None
+        _result_cache = ResultCache(client, ttl_s=ttl_s)
+    return _result_cache
 
 
 class VersionResponse(BaseModel):
@@ -121,6 +147,15 @@ class SubmitRequest(BaseModel):
             "(Algorithm 1 step 5): keep only hits with "
             "score >= min(0.2 * len(query), 8.0). Default true. Set false "
             "to return every aligned hit (legacy behavior)."
+        ),
+    )
+    force_recompute: bool = Field(
+        False,
+        description=(
+            "Bypass the result cache and always run the full pipeline. "
+            "Useful for reproducing historical MSAs or when retrying "
+            "after a pipeline change. On success the fresh result still "
+            "overwrites the cache entry."
         ),
     )
 
@@ -339,6 +374,9 @@ async def _enforce_backpressure(store: JobStore, settings: Any) -> None:
         )
 
 
+_IDEMPOTENCY_EXCLUDED_FIELDS = frozenset({"request_id"})
+
+
 def _idempotency_key(scope_id: str | None, payload: dict[str, Any]) -> str:
     """Hash the (scope, canonical payload) pair.
 
@@ -348,8 +386,15 @@ def _idempotency_key(scope_id: str | None, payload: dict[str, Any]) -> str:
     de-dup). For truly public submission, IP-scoping is a best-effort: a NAT
     fleet may de-dup across members, which is fine — they'd get the same
     answer from the pipeline anyway.
+
+    ``request_id`` is excluded from the canonical form — two submits
+    with the same scientific parameters should de-dup regardless of
+    which edge request stamped them.
     """
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    canonical_payload = {
+        k: v for k, v in payload.items() if k not in _IDEMPOTENCY_EXCLUDED_FIELDS
+    }
+    canonical = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode()
     h = hashlib.sha256()
     h.update((scope_id or "anon").encode())
     h.update(b"\x00")
@@ -374,6 +419,11 @@ async def submit_msa(req: SubmitRequest, request: Request) -> SubmitResponse:
     payload = req.model_dump()
     payload["models"] = resolved_models
     payload["score_model"] = resolved_score_model
+    # Thread the incoming request id onto the job so the worker can
+    # forward it as X-Request-ID on every downstream call. Excluded
+    # from the result-cache canonicalization — see _CACHED_FIELDS.
+    if request_id:
+        payload["request_id"] = request_id
     # Per-chain FASTA header labels — default to ['101', '102', ...]
     # when the caller doesn't pin them, so the emitted A3M always has
     # deterministic headers.
@@ -416,6 +466,43 @@ async def submit_msa(req: SubmitRequest, request: Request) -> SubmitResponse:
                 job_id=prior_id,
                 status=prior_job.status.value,
                 status_url=f"/v2/msa/{prior_id}",
+            )
+
+    # Result-cache hit → synthesize a succeeded job record so clients
+    # still poll via GET /v2/msa/{id} without needing to know about the
+    # cache. The payload stamp on the synthetic job carries the original
+    # submit (so regeneration preserves the original parameters) and the
+    # result's `stats` gets a `cache_hit: true` marker so observability
+    # downstream can distinguish served-from-cache from fresh compute.
+    # Clients can force a bypass with `force_recompute=true`.
+    if not req.force_recompute:
+        cache = await _get_result_cache()
+        cached = await cache.get(payload)
+        if cached is not None:
+            synthesized = Job(
+                id=str(uuid.uuid4()),
+                status=JobStatus.SUCCEEDED,
+                request=payload,
+                created_at=time.time(),
+            )
+            synthesized.started_at = synthesized.created_at
+            synthesized.finished_at = synthesized.created_at
+            stats = dict(cached.stats)
+            stats["cache_hit"] = True
+            synthesized.result = cached.model_copy(update={"stats": stats})
+            await store.insert_terminal(synthesized)
+            await store.redis.set(idem_key, synthesized.id, ex=_IDEMPOTENCY_TTL_S)  # pyright: ignore[reportGeneralTypeIssues]
+            audit_event(
+                "msa.submit.cache_hit",
+                token_id=token_id,
+                request_id=request_id,
+                client_ip=client_ip,
+                job_id=synthesized.id,
+            )
+            return SubmitResponse(
+                job_id=synthesized.id,
+                status=synthesized.status.value,
+                status_url=f"/v2/msa/{synthesized.id}",
             )
 
     await _enforce_backpressure(store, settings)
@@ -494,11 +581,16 @@ async def _forward(
     """
     import logging as _log
 
+    from plmmsa.request_context import httpx_headers_with_request_id
+
     headers: dict[str, str] = {}
     if request is not None:
         rid = getattr(request.state, "request_id", None)
         if rid:
             headers["X-Request-ID"] = rid
+    # Fallback to the ContextVar (always set by RequestContextMiddleware)
+    # — covers callers that don't pass `request=` explicitly.
+    headers = httpx_headers_with_request_id(headers)
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:

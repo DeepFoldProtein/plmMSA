@@ -1,0 +1,186 @@
+# plmMSA Prometheus alerting rules.
+#
+# Loaded via `rule_files: [alerts.yml]` in prometheus.yml when the
+# `observability` compose profile is active. Without an Alertmanager
+# wired up, alerts surface at http://localhost:9091/alerts and the
+# `ALERTS{...}` time series — they do NOT page anyone yet. To get
+# real notifications, add an Alertmanager service (typical pattern:
+# slack / opsgenie / email receiver) and set
+#   alerting:
+#     alertmanagers: [{static_configs: [{targets: [alertmanager:9093]}]}]
+# in prometheus.yml.
+#
+# Severity convention:
+#   - `critical`   — page immediately (data loss / hardware fault / hung stack)
+#   - `warning`    — investigate within the hour (degraded service)
+#   - `info`       — observability hint (capacity trend, not a fire)
+#
+# Each rule's `for:` window is the dwell time before the alert fires —
+# avoids paging on transient blips.
+
+groups:
+  - name: plmmsa-uptime
+    interval: 30s
+    rules:
+      - alert: ScrapeTargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.instance }} is DOWN"
+          description: |
+            Prometheus has been unable to scrape {{ $labels.job }}
+            ({{ $labels.instance }}) for 2 minutes.
+            Job dashboard: http://localhost:9091/targets
+
+  - name: plmmsa-errors
+    interval: 30s
+    rules:
+      - alert: ApiServerErrorRate
+        # Any 5xx anywhere on api is an internal failure worth a look.
+        # Shorter `for:` than other alerts because 5xx storms compound fast.
+        expr: |
+          sum by (service) (rate(plmmsa_http_requests_total{status=~"5.."}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} returning 5xx errors"
+          description: |
+            Sustained 5xx rate on service {{ $labels.service }}.
+            Check `plmmsa.api.error` / `plmmsa.{{ $labels.service }}` log streams.
+
+      - alert: WorkerJobFailures
+        # We expect ~zero pipeline failures on a healthy stack. A handful
+        # over 10 min usually points at one bad upstream (embedding GPU
+        # OOM, vdb collection drop, etc.).
+        expr: rate(plmmsa_worker_jobs_processed_total{status="failed"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker is producing job failures"
+          description: |
+            Worker `mark_failed` rate sustained > 0 over 10m. Look in
+            `plmmsa-worker-1` logs for the latest `pipeline failed for <job>`
+            traceback to identify the upstream cause.
+
+  - name: plmmsa-latency
+    interval: 30s
+    rules:
+      - alert: PipelineP95High
+        # Catch regressions: warm-cache p95 should be well under 60s
+        # for k≤1000 jobs on the deepfold host.
+        expr: |
+          histogram_quantile(0.95,
+            rate(plmmsa_worker_pipeline_duration_seconds_bucket[10m])) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker pipeline p95 > 90s for 10m"
+          description: |
+            p95 wall time per MSA job exceeded 90s sustained. Likely
+            causes: shard index dropped (re-run build_shard_index),
+            cache-seq cold (DBSIZE < 100M), embedding GPU saturated.
+
+      - alert: EmbeddingP95High
+        # /embed/bin p95 is a leading indicator of GPU pressure.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (
+              rate(plmmsa_http_request_duration_seconds_bucket{service="embedding",route="/embed/bin"}[5m]))) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "embedding /embed/bin p95 > 30s"
+          description: |
+            Sustained slow `/embed/bin` responses. Cross-check
+            `DCGM_FI_DEV_GPU_UTIL` for the GPU pin set in `.env`.
+
+  - name: plmmsa-capacity
+    interval: 30s
+    rules:
+      - alert: QueueBackpressure
+        # `queue.backpressure_threshold` defaults to 50 — once we cross,
+        # api starts returning 503 E_QUEUE_FULL. Alert before that.
+        expr: plmmsa_worker_queue_depth > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Job queue depth > 30 for 5m"
+          description: |
+            Worker is falling behind submitters. Scale workers
+            (`docker compose up -d --scale worker=N`) or investigate why
+            jobs are slow (see PipelineP95High).
+
+      - alert: QueueStuck
+        # Queue depth > 0 sustained AND no successful jobs landing —
+        # worker is wedged on something it can't drain.
+        expr: |
+          plmmsa_worker_queue_depth > 0
+          and
+          rate(plmmsa_worker_jobs_processed_total{status="succeeded"}[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker queue stuck — depth > 0 with zero succeeded jobs in 10m"
+          description: |
+            Indicates the worker is hung on a single job (httpx ReadTimeout
+            against embedding/vdb/align is the usual cause). Check the
+            most recent `worker: claimed job <id>` line in worker logs.
+
+  - name: plmmsa-gpu
+    interval: 30s
+    rules:
+      - alert: GpuEccErrors
+        # ECC errors are a hardware fire alarm. A non-zero counter (ever)
+        # is worth investigating; sustained increases mean the card is
+        # going bad.
+        expr: |
+          DCGM_FI_DEV_ECC_DBE_VOL_TOTAL > 0
+          or
+          DCGM_FI_DEV_ECC_SBE_VOL_TOTAL > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ECC errors on gpu={{ $labels.gpu }} ({{ $labels.modelName }})"
+          description: |
+            DBE={{ with query (printf "DCGM_FI_DEV_ECC_DBE_VOL_TOTAL{gpu=\"%s\"}" $labels.gpu) }}{{ . | first | value }}{{ end }}
+            SBE={{ with query (printf "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL{gpu=\"%s\"}" $labels.gpu) }}{{ . | first | value }}{{ end }}.
+            Run `nvidia-smi -q -d ECC` to inspect; consider draining jobs
+            and stress-testing.
+
+      - alert: GpuTempHigh
+        # RTX 6000 Ada starts thermal throttling around 87°C. Alert at
+        # 80°C sustained so we have time to react.
+        expr: DCGM_FI_DEV_GPU_TEMP > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} temp > 80°C for 5m"
+          description: |
+            {{ $labels.modelName }} (gpu={{ $labels.gpu }}) sustained
+            > 80°C. Check fans / chassis airflow; may throttle soon.
+
+      - alert: GpuMemoryNearFull
+        # Predict GPU OOM before /embed crashes. < 2 GiB free on a
+        # 49 GiB card with all 4 PLMs resident usually means a long
+        # input is about to push it over.
+        expr: DCGM_FI_DEV_FB_FREE < 2048
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU {{ $labels.gpu }} has < 2 GiB free for 2m"
+          description: |
+            {{ $labels.modelName }} (gpu={{ $labels.gpu }}) has
+            FB_FREE={{ $value }} MiB. Next long /embed could OOM.
+            Drop `queue.embed_chunk_size` in `settings.toml` if this
+            is steady-state load, not a leak.
