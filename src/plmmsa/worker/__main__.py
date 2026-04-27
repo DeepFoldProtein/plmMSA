@@ -180,9 +180,7 @@ async def _main() -> None:
     # the worker behaves as before. Default TTL 30 days; host `.env` can
     # override via PLMMSA_RESULT_CACHE_TTL_S.
     result_cache_url = os.environ.get("PLMMSA_RESULT_CACHE_URL")
-    result_cache_ttl_s = int(
-        os.environ.get("PLMMSA_RESULT_CACHE_TTL_S", 30 * 24 * 60 * 60)
-    )
+    result_cache_ttl_s = int(os.environ.get("PLMMSA_RESULT_CACHE_TTL_S", 30 * 24 * 60 * 60))
     result_cache_redis: Redis | None = None
     if result_cache_url:
         result_cache_redis = Redis.from_url(result_cache_url, decode_responses=False)
@@ -248,9 +246,7 @@ async def _main() -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _shutdown)
 
-    depth_task = asyncio.create_task(
-        _sample_queue_depth(store, stop_event=stop_event)
-    )
+    depth_task = asyncio.create_task(_sample_queue_depth(store, stop_event=stop_event))
     try:
         await run_forever(
             store,

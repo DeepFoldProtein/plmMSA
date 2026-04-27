@@ -19,8 +19,9 @@ cache_port = 6379
 display_name = "PLMAlign (embedding-SW/NW, affine gap)"
 enabled = true
 # Apply upstream Algorithm 1 step 5 filter: drop hits with alignment
-# score below min(0.2 * len(Q), 8.0). Aligner-specific because the
-# threshold assumes dot-product alignment scores.
+# score below `min(0.2 * top_hit_score, 8.0)`. Score scale is the
+# upstream convention (mean of raw substitution values along the
+# alignment path) — calibrated for the dot-product scoring path.
 filter_enabled = true
 # Scoring mode for the residue-pair similarity matrix.
 # "dot_zscore" matches upstream PLMAlign (raw dot product + global Z-score).
@@ -42,7 +43,9 @@ display_name = "pLM-BLAST (multi-path SW + span extraction)"
 # orchestrator's default aligner. Regenerate bench/run_regression.py
 # baselines before trusting the CASP15 regression for CI.
 enabled = true
-# Same dot-product alignment score scale as PLMAlign.
+# pLM-BLAST scores via windowed-sigma span extraction; the upstream
+# (0.2 * top_hit_score, 8.0) calibration only fits the mean-over-raw
+# path used by PLMAlign. Leave off until pLM-BLAST is calibrated.
 filter_enabled = false
 score_matrix = "dot_zscore"
 gap_penalty = 0.0

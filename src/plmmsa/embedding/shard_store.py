@@ -220,9 +220,7 @@ class ShardStore:
         try:
             client = await self._get_async_redis()
         except Exception as exc:
-            logger.warning(
-                "shard_store: async redis client unavailable: %s", exc, exc_info=True
-            )
+            logger.warning("shard_store: async redis client unavailable: %s", exc, exc_info=True)
             return {}
 
         bare_ids = [self._bare_id(i) for i in ids]

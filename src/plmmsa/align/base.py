@@ -109,10 +109,17 @@ class Aligner(ABC):
         sim: np.ndarray,
         *,
         mode: AlignMode = "local",
+        raw_sim: np.ndarray | None = None,
         **kwargs: Any,
     ) -> Alignment:
         """Optional fast path for matrix-consuming aligners. Default raises
-        so embedding-only aligners (Sinkhorn, neural) aren't forced to stub."""
+        so embedding-only aligners (Sinkhorn, neural) aren't forced to stub.
+
+        `raw_sim` is the un-normalized similarity matrix (see
+        `score_matrix.raw_similarity_for_scoring`) — aligners that follow
+        upstream PLMAlign's `mean(raw[path])` scoring read it; legacy
+        aligners that score on the DP matrix can ignore it.
+        """
         raise NotImplementedError(
             f"{type(self).__name__} is an embedding aligner — call align() directly"
         )
@@ -134,9 +141,16 @@ class MatrixAligner(Aligner):
         sim: np.ndarray,
         *,
         mode: AlignMode = "local",
+        raw_sim: np.ndarray | None = None,
         **kwargs: Any,
     ) -> Alignment:
         """Align one `[Lq, Lt]` similarity matrix → one Alignment.
+
+        `sim` is the matrix the DP runs over (often Z-scored). `raw_sim`,
+        when supplied, is the un-normalized similarity used to score the
+        traceback path the upstream-compatible way (`mean(raw[path])`,
+        see `score_matrix.raw_similarity_for_scoring`). Aligners that
+        don't implement that scoring policy may ignore `raw_sim`.
 
         Backend-specific tunables (gap_open, gap_extend, ...) ride on
         kwargs; the concrete subclass documents its own options.
@@ -154,7 +168,7 @@ class MatrixAligner(Aligner):
         **kwargs: Any,
     ) -> list[Alignment]:
         # Lazy import keeps the base free of matrix-construction details.
-        from plmmsa.align.score_matrix import get_builder
+        from plmmsa.align.score_matrix import get_builder, raw_similarity_for_scoring
 
         sm = score_matrix or self.default_score_matrix
         if score_matrix is None and normalize is not None:
@@ -164,6 +178,15 @@ class MatrixAligner(Aligner):
         query = np.asarray(query_embedding, dtype=np.float32)
         targets = [np.asarray(t, dtype=np.float32) for t in target_embeddings]
         sim_matrices = builder.build(query, targets)
+        # Upstream PLMAlign reports `mean(raw[path])` as the alignment score
+        # (plmalign_util/alignment.py:204) — DP runs on the (possibly
+        # Z-scored) matrix from `build()`, but the score itself is computed
+        # from the raw similarity matrix. We materialize that raw matrix
+        # once here and thread it through to `align_matrix`. For modes
+        # where DP and scoring share a matrix (`dot`, `cosine` today), this
+        # is identical to `sim`. Aligners that opt into upstream-compat
+        # scoring read `raw_sim`; those that don't can ignore it.
+        raw_matrices = [raw_similarity_for_scoring(sm, query, t) for t in targets]
 
         # Thread-pool fanout across targets. The DP kernels are JIT-
         # compiled with `nogil=True`, so threads actually parallelize
@@ -171,13 +194,14 @@ class MatrixAligner(Aligner):
         # the pool overhead and run sequentially.
         n = len(sim_matrices)
         pool_size = _resolve_pool_size()
+        pairs = list(zip(sim_matrices, raw_matrices, strict=True))
         if n <= 1 or pool_size <= 1:
-            return [self.align_matrix(sim, mode=mode, **kwargs) for sim in sim_matrices]
+            return [self.align_matrix(sim, mode=mode, raw_sim=raw, **kwargs) for sim, raw in pairs]
         with ThreadPoolExecutor(max_workers=min(pool_size, n)) as ex:
             return list(
                 ex.map(
-                    lambda sim: self.align_matrix(sim, mode=mode, **kwargs),
-                    sim_matrices,
+                    lambda sr: self.align_matrix(sr[0], mode=mode, raw_sim=sr[1], **kwargs),
+                    pairs,
                 )
             )
 

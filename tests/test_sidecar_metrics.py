@@ -20,7 +20,6 @@ from fakeredis import FakeAsyncRedis
 from fastapi.testclient import TestClient
 
 from plmmsa.jobs import JobResult, JobStore, ResultCache
-from plmmsa.jobs.models import JobStatus
 from plmmsa.metrics import (
     WORKER_JOBS_PROCESSED,
     WORKER_PIPELINE_DURATION,

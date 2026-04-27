@@ -59,17 +59,24 @@ def test_cosine_score_bounded() -> None:
     q, t = _query_target()
     aligner = PLMAlign()
     [al] = aligner.align(q, [t], score_matrix="cosine", mode="local")
-    # Three perfect cosine matches should push score to ~3.0.
-    assert 2.5 <= al.score <= 3.5
+    # Score is now `mean(raw_similarity[path])` (upstream PLMAlign
+    # convention, see align.plmalign._align_pair). Three perfect cosine
+    # matches → mean ≈ 1.0.
+    assert 0.9 <= al.score <= 1.1
 
 
-def test_dot_vs_zscore_differ() -> None:
+def test_dot_and_zscore_share_raw_scoring() -> None:
+    """Upstream-compatible scoring: both `dot` and `dot_zscore` score
+    the path against the raw dot-product matrix
+    (`raw_similarity_for_scoring`), so on inputs where the DP picks the
+    same path under raw and Z-scored DP fills (the typical case for a
+    clean diagonal), the reported scores match.
+    """
     q, t = _query_target()
     aligner = PLMAlign()
     [raw] = aligner.align(q, [t], score_matrix="dot")
     [zscored] = aligner.align(q, [t], score_matrix="dot_zscore")
-    # Absolute scores diverge — Z-scoring shifts and rescales the matrix.
-    assert not np.isclose(raw.score, zscored.score)
+    assert np.isclose(raw.score, zscored.score)
 
 
 def test_legacy_normalize_kwarg_maps_to_cosine() -> None:

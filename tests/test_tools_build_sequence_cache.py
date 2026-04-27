@@ -75,9 +75,7 @@ async def test_build_writes_seq_and_tax_keys_round_trip(tmp_path: Path) -> None:
     )
     redis = FakeAsyncRedis()
 
-    seq_count, tax_count = await build(
-        records=iter_fasta(fasta), redis=redis, batch_size=2
-    )
+    seq_count, tax_count = await build(records=iter_fasta(fasta), redis=redis, batch_size=2)
     assert (seq_count, tax_count) == (3, 2)
 
     fetcher = RedisTargetFetcher(redis)
@@ -94,9 +92,7 @@ async def test_build_from_csv_dir_round_trip(tmp_path: Path) -> None:
     (tmp_path / "0-0.csv").write_text(
         header + "UPI0001,UniRef50_UPI0001 TaxID=9606 RepID=UPI0001,MKT,3,0\n"
     )
-    (tmp_path / "0-1.csv").write_text(
-        header + "UPI0002,UniRef50_UPI0002 no-taxid,AAAGGG,6,0\n"
-    )
+    (tmp_path / "0-1.csv").write_text(header + "UPI0002,UniRef50_UPI0002 no-taxid,AAAGGG,6,0\n")
     redis = FakeAsyncRedis()
 
     seq_count, tax_count = await build(

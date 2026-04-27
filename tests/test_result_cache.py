@@ -285,9 +285,9 @@ async def test_job_store_insert_terminal_refuses_non_terminal() -> None:
     """Guard against api wiring a bug where it tries to drop a non-terminal
     synthesized job into the store and skip the queue."""
     store = JobStore(FakeAsyncRedis())
-    from plmmsa.jobs.models import Job
-
     import pytest
+
+    from plmmsa.jobs.models import Job
 
     queued = Job(id="not-terminal", status=JobStatus.QUEUED, request={}, created_at=0.0)
     with pytest.raises(ValueError, match="terminal"):

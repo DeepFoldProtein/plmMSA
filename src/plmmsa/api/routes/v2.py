@@ -145,10 +145,10 @@ class SubmitRequest(BaseModel):
         description=(
             "Apply the post-alignment score-threshold filter. The cutoff "
             "is aligner-specific: PLMAlign / pLM-BLAST use upstream "
-            "Algorithm 1 step 5 (`min(0.2 * len(query), 8.0)`), OTalign "
-            "uses its calibrated transport-mass floor "
-            "(`[aligners.otalign].filter_threshold`, 0.25 by default). "
-            "Set false to return every aligned hit."
+            "Algorithm 1 step 5 (`min(0.2 * top_hit_score, 8.0)` — see "
+            "PLMAlign's alignment_to_a3m.py), OTalign uses its calibrated "
+            "transport-mass floor (`[aligners.otalign].filter_threshold`, "
+            "0.25 by default). Set false to return every aligned hit."
         ),
     )
     force_recompute: bool = Field(
@@ -393,9 +393,7 @@ def _idempotency_key(scope_id: str | None, payload: dict[str, Any]) -> str:
     with the same scientific parameters should de-dup regardless of
     which edge request stamped them.
     """
-    canonical_payload = {
-        k: v for k, v in payload.items() if k not in _IDEMPOTENCY_EXCLUDED_FIELDS
-    }
+    canonical_payload = {k: v for k, v in payload.items() if k not in _IDEMPOTENCY_EXCLUDED_FIELDS}
     canonical = json.dumps(canonical_payload, sort_keys=True, separators=(",", ":")).encode()
     h = hashlib.sha256()
     h.update((scope_id or "anon").encode())

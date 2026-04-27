@@ -74,7 +74,7 @@ class AnkhCL(PLM):
             is_not_special = special_mask == 0
             is_not_pad = attn_mask == 1
             final_mask = is_not_special & is_not_pad
-            residue_embeddings = emb[final_mask,:].detach().cpu()
+            residue_embeddings = emb[final_mask, :].detach().cpu()
             mask_len = final_mask.sum().item()
             if mask_len != len(seq):
                 raise ValueError(

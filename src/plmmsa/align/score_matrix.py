@@ -48,6 +48,27 @@ class ScoreMatrixBuilder(Protocol):
         ...
 
 
+def raw_similarity_for_scoring(
+    score_matrix: str, query: np.ndarray, target: np.ndarray
+) -> np.ndarray:
+    """Un-normalized substitution matrix used to score the alignment path.
+
+    Upstream PLMAlign runs the DP over a Z-scored matrix but reports the
+    score as `mean(raw[path])` — see plmalign_util/alignment.py:204. This
+    helper materializes that "raw" matrix per the chosen `score_matrix`
+    convention. For modes where DP and scoring use the same matrix
+    (`dot`, `cosine` today), the returned array equals
+    `get_builder(score_matrix).build(query, [target])[0]`.
+    """
+    q = np.asarray(query, dtype=np.float32)
+    t = np.asarray(target, dtype=np.float32)
+    if score_matrix in ("dot", "dot_zscore"):
+        return q @ t.T
+    if score_matrix == "cosine":
+        return _l2_normalize(q) @ _l2_normalize(t).T
+    raise ValueError(f"score_matrix must be one of {SCORE_MATRIX_CHOICES}, got {score_matrix!r}")
+
+
 class DotBuilder:
     """Raw dot product, no normalization. Primarily a debug tool.
 
@@ -147,5 +168,6 @@ __all__ = [
     "DotZScoreBuilder",
     "ScoreMatrixBuilder",
     "get_builder",
+    "raw_similarity_for_scoring",
     "register_builder",
 ]

@@ -127,6 +127,7 @@ class PlmBlast(MatrixAligner):
         window_size: int | None = None,
         sigma_factor: float | None = None,
         border_stride: int | None = None,
+        raw_sim: np.ndarray | None = None,
         **_: Any,
     ) -> Alignment:
         spans = self._all_spans(

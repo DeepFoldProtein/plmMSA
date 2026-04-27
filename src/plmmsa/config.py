@@ -32,17 +32,17 @@ class AlignerEntry(BaseModel):
     display_name: str
     enabled: bool = True
     # Upstream PLMAlign Algorithm 1 step 5 filter — drops hits whose
-    # alignment score is below `min(0.2 * len(Q), 8.0)`. Aligner-
-    # specific because the threshold assumes dot-product alignment
-    # scores; OTalign's transport-mass score lives on a different
-    # scale so its default is off. Per-request `filter_by_score`
-    # always wins over this setting.
+    # alignment score is below `min(0.2 * top_hit_score, 8.0)` (see
+    # PLMAlign's alignment_to_a3m.py). The 8.0 floor is on the
+    # upstream score scale (mean of raw substitution values along the
+    # alignment path), which is what `align.plmalign` now reports.
+    # Per-request `filter_by_score` always wins over this setting.
     filter_enabled: bool = False
     # Optional fixed score-threshold floor for the post-align filter.
     # `None` (default) → use the upstream PLMAlign rule
-    # `min(0.2 * len(Q), 8.0)` (calibrated for dot-product scores).
-    # A float overrides the rule with a constant cutoff — used by
-    # OTalign whose transport-plan-mass score is on a different scale.
+    # `min(0.2 * top_hit_score, 8.0)`. A float overrides the rule with
+    # a constant cutoff — used by OTalign whose transport-plan-mass
+    # score is on a different scale than dot-product means.
     filter_threshold: float | None = None
 
 

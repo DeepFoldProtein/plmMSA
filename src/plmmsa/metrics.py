@@ -130,12 +130,8 @@ class MetricsMiddleware:
                 route=route_label,
                 status=str(status_holder["status"]),
             ).inc()
-            LATENCY.labels(
-                service=self.service, method=method, route=route_label
-            ).observe(duration)
-            INFLIGHT.labels(
-                service=self.service, method=method, route=route_label
-            ).dec()
+            LATENCY.labels(service=self.service, method=method, route=route_label).observe(duration)
+            INFLIGHT.labels(service=self.service, method=method, route=route_label).dec()
 
 
 # ---------------------------------------------------------------------------
@@ -158,12 +154,12 @@ def start_worker_metrics_server(port: int, *, registry: CollectorRegistry = REGI
 __all__ = [
     "INFLIGHT",
     "LATENCY",
-    "MetricsMiddleware",
     "REGISTRY",
     "REQUESTS",
     "WORKER_JOBS_PROCESSED",
     "WORKER_PIPELINE_DURATION",
     "WORKER_QUEUE_DEPTH",
+    "MetricsMiddleware",
     "router",
     "start_worker_metrics_server",
 ]

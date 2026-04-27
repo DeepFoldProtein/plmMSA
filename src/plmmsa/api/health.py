@@ -132,9 +132,7 @@ async def health() -> AggregatedHealthResponse:
         vdb_url = os.environ.get("VDB_URL", "http://vdb:8082")
         align_url = os.environ.get("ALIGN_URL", "http://align:8083")
         cache_ops_url = os.environ.get("CACHE_URL", "redis://cache-ops:6379")
-        cache_seq_url = os.environ.get(
-            "PLMMSA_SEQUENCE_REDIS_URL", "redis://cache-seq:6379"
-        )
+        cache_seq_url = os.environ.get("PLMMSA_SEQUENCE_REDIS_URL", "redis://cache-seq:6379")
         # cache-emb is deployed but not currently read from by any service
         # (per the embedding-cache removal). Ping it anyway so the aggregate
         # surfaces outages early; the forthcoming result cache will depend
@@ -165,9 +163,7 @@ async def health() -> AggregatedHealthResponse:
                     DownstreamStatus(status="down", detail={"error": "aggregate timeout"}),
                 )
 
-        aggregate_status = (
-            "ok" if all(v.status == "ok" for v in downstream.values()) else "down"
-        )
+        aggregate_status = "ok" if all(v.status == "ok" for v in downstream.values()) else "down"
         payload = AggregatedHealthResponse(
             status=aggregate_status,
             service="api",

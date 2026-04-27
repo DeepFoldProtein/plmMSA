@@ -16,8 +16,6 @@ from plmmsa import __version__
 from plmmsa.admin.routes import router as admin_router
 from plmmsa.admin.tokens import TokenStore
 from plmmsa.api.health import router as health_router
-from plmmsa.metrics import MetricsMiddleware
-from plmmsa.metrics import router as metrics_router
 from plmmsa.api.middleware import (
     BodySizeLimitMiddleware,
     RateLimitMiddleware,
@@ -29,6 +27,8 @@ from plmmsa.api.routes.v1 import router as v1_router
 from plmmsa.api.routes.v2 import router as v2_router
 from plmmsa.config import get_settings
 from plmmsa.errors import PlmMSAError
+from plmmsa.metrics import MetricsMiddleware
+from plmmsa.metrics import router as metrics_router
 
 
 @asynccontextmanager

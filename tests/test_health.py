@@ -29,9 +29,7 @@ def test_healthz_ok() -> None:
     assert body["service"] == "api"
 
 
-def _stub_probes(
-    monkeypatch: pytest.MonkeyPatch, *, http_ok: bool, redis_ok: bool
-) -> None:
+def _stub_probes(monkeypatch: pytest.MonkeyPatch, *, http_ok: bool, redis_ok: bool) -> None:
     """Replace the downstream probes with deterministic stubs."""
     from plmmsa.api import health as _health
 
@@ -93,7 +91,8 @@ def test_health_aggregate_downstream_down(monkeypatch: pytest.MonkeyPatch) -> No
 def test_health_aggregate_caches_result(monkeypatch: pytest.MonkeyPatch) -> None:
     """Burst polls within the TTL window reuse the cached payload and
     don't re-probe downstreams."""
-    from plmmsa.api import app, health as _health
+    from plmmsa.api import app
+    from plmmsa.api import health as _health
 
     call_counts: dict[str, int] = {"http": 0, "redis": 0}
 

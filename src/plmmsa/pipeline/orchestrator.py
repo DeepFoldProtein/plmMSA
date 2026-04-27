@@ -32,31 +32,38 @@ def default_aligner_id() -> str:
     return DEFAULT_ALIGNER_ID
 
 
-def _score_threshold(query_len: int) -> float:
-    """Upstream PLMAlign's Algorithm 1 step 5 threshold:
-    `min(0.2 * Sself, 8.0)` where Sself = len(Q). For any query
-    >= 40 aa this saturates at 8.0.
+def _upstream_top_score_threshold(top_score: float) -> float:
+    """Upstream PLMAlign's Algorithm 1 step 5 (alignment_to_a3m.py:50-69):
+
+        cutoff = top_score * 0.2
+        keep if score >= cutoff OR score >= 8.0
+            == score >= min(0.2 * top_score, 8.0)
+
+    `top_score` is the highest hit's score after ranking — *not* the
+    query self-score and *not* `len(Q)`. The 8.0 floor only matters when
+    the best hit is itself weak (`top_score < 40`); on real CASP-scale
+    queries the dynamic `0.2 * top_score` floor wins.
     """
-    return min(0.2 * float(query_len), 8.0)
+    return min(0.2 * float(top_score), 8.0)
 
 
 def _resolve_filter_threshold(
     aligner: str,
-    query_len: int,
+    top_score: float,
     fixed_thresholds: dict[str, float],
 ) -> float:
     """Pick the post-align score floor for `aligner`.
 
     A fixed float in `fixed_thresholds` (set per-aligner via
     `[aligners.*].filter_threshold`) wins; absent or `None` falls
-    through to the upstream length-dependent rule. OTalign rides the
-    fixed path because its transport-plan-mass score is on a
-    different scale than the dot-product calibration.
+    through to the upstream rule (see `_upstream_top_score_threshold`).
+    OTalign rides the fixed path because its transport-plan-mass score
+    is on a different scale than the dot-product mean calibration.
     """
     explicit = fixed_thresholds.get(aligner)
     if explicit is not None:
         return float(explicit)
-    return _score_threshold(query_len)
+    return _upstream_top_score_threshold(top_score)
 
 
 def _columns_in_bounds(
@@ -120,8 +127,9 @@ class OrchestratorConfig:
     # their pre-settings "no filter" behavior.
     filter_enabled_aligners: frozenset[str] = field(default_factory=frozenset)
     # Per-aligner fixed score thresholds. Aligner ids mapped to a
-    # constant cutoff override the upstream `min(0.2 * len(Q), 8.0)`
-    # rule (which only makes sense on dot-product scores). OTalign is
+    # constant cutoff override the upstream
+    # `min(0.2 * top_hit_score, 8.0)` rule (which is calibrated for
+    # PLMAlign's mean-of-raw-substitution scoring scale). OTalign is
     # the canonical user — its transport-mass score is calibrated at
     # 0.25 in `[aligners.otalign].filter_threshold`.
     filter_thresholds: dict[str, float] = field(default_factory=dict)
@@ -309,9 +317,12 @@ class Orchestrator:
         # its score scale differs). Per-request `filter_by_score` must
         # also be true; either false disables the filter.
         hits_pre_filter = len(merged_hits)
-        filter_threshold = _resolve_filter_threshold(
-            aligner, len(query_seq), cfg.filter_thresholds
-        )
+        # Upstream's `cutoff = 0.2 * top_score` (alignment_to_a3m.py:58)
+        # — `top_score` is the best hit's reported score post-ranking,
+        # not query_self_score and not len(Q). `merged_hits` is already
+        # sorted desc, so the first entry's score is `top_score`.
+        top_score = float(merged_hits[0].score) if merged_hits else 0.0
+        filter_threshold = _resolve_filter_threshold(aligner, top_score, cfg.filter_thresholds)
         filter_applied = filter_by_score and aligner in cfg.filter_enabled_aligners
         if filter_applied:
             merged_hits = [h for h in merged_hits if h.score >= filter_threshold]
@@ -616,8 +627,10 @@ class Orchestrator:
                     hits_fetched=0,
                     hits_pre_filter=0,
                     filter_applied=False,
+                    # No hits → no `top_score`; report the absolute floor
+                    # the rule would clamp to (8.0) for stats consistency.
                     filter_threshold=_resolve_filter_threshold(
-                        aligner, len(query_seq), self._config.filter_thresholds
+                        aligner, 0.0, self._config.filter_thresholds
                     ),
                     per_retrieval_stats=per_retrieval_stats,
                     query_self_score=query_self_score,
@@ -650,7 +663,7 @@ class Orchestrator:
                     hits_pre_filter=0,
                     filter_applied=False,
                     filter_threshold=_resolve_filter_threshold(
-                        aligner, len(query_seq), self._config.filter_thresholds
+                        aligner, 0.0, self._config.filter_thresholds
                     ),
                     per_retrieval_stats=per_retrieval_stats,
                     query_self_score=query_self_score,
@@ -713,11 +726,14 @@ class Orchestrator:
             )
         hits.sort(key=lambda h: h.score, reverse=True)
 
-        # Upstream PLMAlign Algorithm 1 step 5. Per-aligner toggle
-        # via settings; per-request `filter_by_score` must also be true.
+        # Upstream PLMAlign Algorithm 1 step 5 (alignment_to_a3m.py:50-69).
+        # Per-aligner toggle via settings; per-request `filter_by_score`
+        # must also be true. `top_score` is the best hit's reported
+        # score (hits already sorted desc by score above).
         hits_pre_filter = len(hits)
+        top_score = float(hits[0].score) if hits else 0.0
         filter_threshold = _resolve_filter_threshold(
-            aligner, len(query_seq), self._config.filter_thresholds
+            aligner, top_score, self._config.filter_thresholds
         )
         filter_applied = filter_by_score and aligner in self._config.filter_enabled_aligners
         if filter_applied:

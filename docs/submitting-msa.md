@@ -136,7 +136,7 @@ Response (`202 Accepted`):
 | `aligner`         | no       | `plmalign`          | `plmalign`, `plm_blast`, or `otalign`.                                                                                                                                                                                                                    |
 | `mode`            | no       | `local`             | `local` / `global` (all aligners) · `glocal` / `q2t` / `t2q` (OTalign only; other aligners 400 on these). No silent remap — OTalign honors the mode verbatim.                                                                                             |
 | `score_model`     | no       | aligner default     | PLM used to build the score matrix. `plmalign`/`plm_blast` default to `prott5` (shard store); `otalign` defaults to `ankh_large` (live re-embed). Pass `""` to disable cross-PLM scoring.                                                                 |
-| `filter_by_score` | no       | `true`              | Apply the post-alignment score-threshold filter. Cutoff is aligner-specific: PLMAlign / pLM-BLAST use upstream Algorithm 1 step 5 (`min(0.2·len(Q), 8.0)`); OTalign uses its calibrated transport-mass floor (`[aligners.otalign].filter_threshold`, default `0.25`). Per-aligner enable is in `[aligners.*].filter_enabled`. Per-request `false` always wins. |
+| `filter_by_score` | no       | `true`              | Apply the post-alignment score-threshold filter. Cutoff is aligner-specific: PLMAlign uses upstream Algorithm 1 step 5 (`min(0.2 · top_hit_score, 8.0)`, on the upstream score scale — see "Score scale" below); OTalign uses its calibrated transport-mass floor (`[aligners.otalign].filter_threshold`, default `0.25`); pLM-BLAST is off pending span-score calibration. Per-aligner enable is in `[aligners.*].filter_enabled`. Per-request `false` always wins. |
 | `options`         | no       | `{}`                | Aligner kwargs: `gap_open`, `gap_extend`, `normalize`, ...                                                                                                                                                                                                |
 | `force_recompute` | no       | `false`             | Bypass the completed-MSA result cache and always run the pipeline. On success the fresh result still overwrites the cache entry. Useful for reproducing or retrying after a pipeline change.                                                              |
 
@@ -159,11 +159,38 @@ returns whatever the surviving models produced.
 | `hits_post_filter` | Count after the filter (same as `hits_fetched`).                                                                                                                                                                              |
 | `filter_by_score`  | Request-level flag (`filter_by_score` field on the submit).                                                                                                                                                                   |
 | `filter_applied`   | `true` only when both the request flag and the aligner's `filter_enabled` are true.                                                                                                                                           |
-| `filter_threshold` | Aligner-specific cutoff actually used: `min(0.2 · len(Q), 8.0)` for PLMAlign / pLM-BLAST (dot-product scale), the configured fixed floor for OTalign (`0.25` by default, transport-mass scale).                               |
+| `filter_threshold` | Aligner-specific cutoff actually used: `min(0.2 · top_hit_score, 8.0)` for PLMAlign on the upstream score scale (mean of raw substitution values along the alignment path); the configured fixed floor for OTalign (`0.25` by default, transport-mass scale).                                                                              |
 | `cache_hit`        | `true` when the server served this MSA from the result cache (`cache-emb`) instead of running the pipeline. Absent on fresh compute. The job record's `started_at` and `finished_at` collapse to the same timestamp on a hit. |
 
 A3M rows carry the raw alignment score in the FASTA header
 (`>target_id   123.456`), so you can sort or re-filter client-side.
+
+### Score scale (PLMAlign)
+
+PLMAlign reports `score = mean(raw_substitution[path])` — the average
+of raw similarity values at every aligned (qi, ti) match cell along
+the traceback path. This matches upstream PLMAlign's
+`alignment_to_a3m.py:50-69` convention exactly, so scores from
+the live service are directly comparable to upstream paper +
+deepfold2 baselines.
+
+For reference, on a 677-residue T1124 self-alignment with
+`score_model = prott5`, `query_self_score ≈ 35.2` and the
+top-ranked hit's score is essentially the same (~34.85, since
+T1124 itself or a near-identical homolog is in UniRef50). Strong
+homologs land in the 17–35 band; the resulting Algorithm 1 step 5
+threshold for that job is `min(0.2 · 34.85, 8.0) = 6.97`. The 8.0
+clamp only kicks in when the best hit is itself weak; on
+CASP-scale jobs the dynamic `0.2 · top_hit_score` floor wins.
+
+> Pre-2026-04-28 jobs returned `score = SW DP optimum (sum-along-
+> path − gaps)` on the **Z-scored** matrix, which inflated values
+> by roughly the alignment length (e.g. T1124 self-score reported
+> as 5413.4 instead of the upstream-equivalent 35.2). The result
+> cache was flushed on the rollout, so cached entries from before
+> the change no longer shadow live submissions; jobs persisted in
+> external `cache-emb` snapshots still carry the old scale and need
+> `force_recompute=true` to refresh.
 
 ### Limits enforced at the edge
 

@@ -55,6 +55,7 @@ class PLMAlign(MatrixAligner):
         mode: AlignMode = "local",
         gap_open: float | None = None,
         gap_extend: float | None = None,
+        raw_sim: np.ndarray | None = None,
         **_: Any,
     ) -> Alignment:
         if mode not in ("local", "global"):
@@ -69,6 +70,9 @@ class PLMAlign(MatrixAligner):
             mode=mode,
             gap_open=go,
             gap_extend=ge,
+            raw_sim=(
+                np.ascontiguousarray(raw_sim, dtype=np.float32) if raw_sim is not None else None
+            ),
         )
 
 
@@ -78,6 +82,7 @@ def _align_pair(
     mode: AlignMode,
     gap_open: float,
     gap_extend: float,
+    raw_sim: np.ndarray | None = None,
 ) -> Alignment:
     lq, lt = sim.shape
     go = np.float32(gap_open)
@@ -98,13 +103,13 @@ def _align_pair(
     if mode == "local":
         flat = int(np.argmax(M))
         i, j = divmod(flat, lt + 1)
-        best = float(M[i, j])
+        dp_optimum = float(M[i, j])
         state = _M
     else:
         i, j = lq, lt
         candidates = {_M: M[i, j], _X: X[i, j], _Y: Y[i, j]}
         state = max(candidates, key=lambda k: candidates[k])
-        best = float(candidates[state])
+        dp_optimum = float(candidates[state])
 
     columns = _traceback(sim, M, X, Y, i, j, state, mode=mode, go=go, ge=ge)
 
@@ -116,8 +121,22 @@ def _align_pair(
     else:
         q_start = q_end = t_start = t_end = 0
 
+    # Upstream PLMAlign reports the alignment score as the mean of the
+    # raw substitution matrix at every aligned (qi, ti) match cell —
+    # see plmalign_util/alignment.py:204 (`arr_values.mean()`). When the
+    # caller threads `raw_sim` through (always true for the live
+    # service via base.MatrixAligner.align), we honor that convention
+    # so scores are comparable to the upstream paper / deepfold2
+    # baselines. The DP optimum stays the fallback when no raw matrix
+    # is supplied (e.g. tests that hand-craft a sim matrix).
+    if raw_sim is not None and columns:
+        match_values = [float(raw_sim[qi, ti]) for qi, ti in columns if qi >= 0 and ti >= 0]
+        score = float(np.mean(match_values)) if match_values else 0.0
+    else:
+        score = dp_optimum
+
     return Alignment(
-        score=best,
+        score=score,
         mode=mode,
         query_start=q_start,
         query_end=q_end,

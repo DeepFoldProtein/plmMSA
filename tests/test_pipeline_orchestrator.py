@@ -96,7 +96,7 @@ async def test_orchestrator_happy_path_builds_a3m() -> None:
                 "target_start": 0,
                 "target_end": 4,
                 "columns": [[0, 0], [1, 1], [2, 2], [-1, 3]],
-            }
+            },
         ],
     )
     fetcher = DictTargetFetcher({"T1": target_seq})

@@ -313,7 +313,9 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=args.batch,
         )
     )
-    print(f"Wrote {seq_count} seq keys, {tax_count} tax keys to {args.redis_url} (source: {source_desc})")
+    print(
+        f"Wrote {seq_count} seq keys, {tax_count} tax keys to {args.redis_url} (source: {source_desc})"
+    )
     return 0
 
 
