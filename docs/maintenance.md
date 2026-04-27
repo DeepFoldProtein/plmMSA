@@ -498,17 +498,17 @@ template when updating `settings.toml`.
 
 ## Common failure modes
 
-| Symptom                                                                        | Cause                                            | Fix                                                                                                                |
-| ------------------------------------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `could not select device driver "nvidia"`                                      | `nvidia-container-toolkit` not configured        | Install and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`              |
-| `bind: address already in use` on `api`                                        | Stale local `uvicorn` holding port 8080          | `ss -tlnp \| grep :8080` and kill the offender                                                                     |
-| Worker logs `Name or service not known` on `embedding:8081`                    | `embedding` container crashed or disabled        | `./bin/logs.sh embedding`; verify GPU + HF cache                                                                   |
-| `/v2/*` returns 401 `E_AUTH_INVALID`                                           | Token revoked or bootstrap rotated               | Re-mint via `/admin/tokens`                                                                                        |
-| `GET /v2/msa/{id}` says `failed` with `E_INTERNAL "Name or service not known"` | One of embedding / vdb / align is down           | Check that service's health + logs                                                                                 |
-| Slow `./bin/up.sh` after many restarts                                         | AOF/RDB growth on one of the three caches        | Wipe the offender's `$CACHE_*_DATA_DIR` (see "Clearing / wiping")                                                  |
-| Redis container logs `Permission denied` writing `/data/dump.rdb`              | Host dir owner mismatches `REDIS_CONTAINER_USER` | `chown` the host dir to the configured uid/gid, or unset `REDIS_CONTAINER_USER` to fall back to image default 999. |
-| Worker logs `shard lookup failed for model=prott5; falling back to /embed` then `httpx.ReadTimeout` after 900 s, job ends `failed E_INTERNAL` | `shard:prott5:*` index empty in `cache-seq` (sqlite + dir-scan fallback can't beat the http timeout on `/gpfs`) | Run `python -m plmmsa.tools.build_shard_index` once — see [§ ProtT5 shard path index](#prott5-shard-path-index). Re-run after any `cache-seq` wipe. |
-| `embedding` container flips to `(unhealthy)` while jobs are running but `/embed/bin` requests still succeed | /health probe queues behind a long GPU-bound `/embed/bin` and trips the healthcheck `timeout` (5 s default was too tight) | Bumped to 30 s in `docker-compose.yml`; if you tune it down, watch out under `k≥1000` Ankh-Large jobs |
+| Symptom                                                                                                                                          | Cause                                                                                                                           | Fix                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `could not select device driver "nvidia"`                                                                                                        | `nvidia-container-toolkit` not configured                                                                                       | Install and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`                                                                                                        |
+| `bind: address already in use` on `api`                                                                                                          | Stale local `uvicorn` holding port 8080                                                                                         | `ss -tlnp \| grep :8080` and kill the offender                                                                                                                                                               |
+| Worker logs `Name or service not known` on `embedding:8081`                                                                                      | `embedding` container crashed or disabled                                                                                       | `./bin/logs.sh embedding`; verify GPU + HF cache                                                                                                                                                             |
+| `/v2/*` returns 401 `E_AUTH_INVALID`                                                                                                             | Token revoked or bootstrap rotated                                                                                              | Re-mint via `/admin/tokens`                                                                                                                                                                                  |
+| `GET /v2/msa/{id}` says `failed` with `E_INTERNAL "Name or service not known"`                                                                   | One of embedding / vdb / align is down                                                                                          | Check that service's health + logs                                                                                                                                                                           |
+| Slow `./bin/up.sh` after many restarts                                                                                                           | AOF/RDB growth on one of the three caches                                                                                       | Wipe the offender's `$CACHE_*_DATA_DIR` (see "Clearing / wiping")                                                                                                                                            |
+| Redis container logs `Permission denied` writing `/data/dump.rdb`                                                                                | Host dir owner mismatches `REDIS_CONTAINER_USER`                                                                                | `chown` the host dir to the configured uid/gid, or unset `REDIS_CONTAINER_USER` to fall back to image default 999.                                                                                           |
+| Worker logs `shard lookup failed for model=prott5; falling back to /embed` then `httpx.ReadTimeout` after 900 s, job ends `failed E_INTERNAL`    | `shard:prott5:*` index empty in `cache-seq` (sqlite + dir-scan fallback can't beat the http timeout on `/gpfs`)                 | Run `python -m plmmsa.tools.build_shard_index` once — see [§ ProtT5 shard path index](#prott5-shard-path-index). Re-run after any `cache-seq` wipe.                                                          |
+| `embedding` container flips to `(unhealthy)` while jobs are running but `/embed/bin` requests still succeed                                      | /health probe queues behind a long GPU-bound `/embed/bin` and trips the healthcheck `timeout` (5 s default was too tight)       | Bumped to 30 s in `docker-compose.yml`; if you tune it down, watch out under `k≥1000` Ankh-Large jobs                                                                                                        |
 | `prometheus` container crashloops with `panic: Unable to create mmap-ed active query log` / `open /prometheus/queries.active: permission denied` | Compose's `create_host_path: true` made `$PROMETHEUS_DATA_DIR` root-owned; container runs as uid 65534 (nobody) and can't write | Stop prometheus, `rm -rf` the empty data dir, recreate it owned by your host user, set `PROMETHEUS_CONTAINER_USER=$(id -u):$(id -g)` in `.env`, and recreate the container. See `.env.example` for the knob. |
 
 ## What lives where
@@ -625,16 +625,16 @@ docker compose --profile observability stop prometheus
 Default URL: **`http://localhost:${PROMETHEUS_HOST_PORT:-9091}`**.
 Useful pages once it's open:
 
-| URL                           | What it shows                                                                                                                   |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `/` (Graph)                   | Type a PromQL query into the box; the **Table** tab shows current values, the **Graph** tab plots over time. Bookmark queries via the URL bar — Prometheus encodes the query into the URL. |
-| `/targets`                    | Live scrape health for every target. Click a target to see its raw `/metrics` blob. The "Last Scrape", "Last Error", and "Scrape Duration" columns are the first stop when something looks stale. |
-| `/service-discovery`          | What targets the SD config resolved to before relabeling — useful when you change `prometheus.yml` and want to confirm what hit the scrape pool. |
-| `/rules`, `/alerts`           | Recording / alerting rules (none configured by default in this stack).                                                          |
-| `/tsdb-status`                | TSDB health: head series count, head chunk count, retention. Use it to gauge how big the on-disk data dir is going to get.       |
-| `/flags`                      | Effective command-line flags. Confirms `--storage.tsdb.retention.time` etc. landed.                                              |
-| `/status/runtime`             | Goroutine / GC / start time / uptime / memory.                                                                                  |
-| `/api/v1/query?query=...`     | Raw HTTP API. The Graph UI is just a thin shell over this — copy a working PromQL into curl/jq for scripting.                    |
+| URL                       | What it shows                                                                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/` (Graph)               | Type a PromQL query into the box; the **Table** tab shows current values, the **Graph** tab plots over time. Bookmark queries via the URL bar — Prometheus encodes the query into the URL.        |
+| `/targets`                | Live scrape health for every target. Click a target to see its raw `/metrics` blob. The "Last Scrape", "Last Error", and "Scrape Duration" columns are the first stop when something looks stale. |
+| `/service-discovery`      | What targets the SD config resolved to before relabeling — useful when you change `prometheus.yml` and want to confirm what hit the scrape pool.                                                  |
+| `/rules`, `/alerts`       | Recording / alerting rules (none configured by default in this stack).                                                                                                                            |
+| `/tsdb-status`            | TSDB health: head series count, head chunk count, retention. Use it to gauge how big the on-disk data dir is going to get.                                                                        |
+| `/flags`                  | Effective command-line flags. Confirms `--storage.tsdb.retention.time` etc. landed.                                                                                                               |
+| `/status/runtime`         | Goroutine / GC / start time / uptime / memory.                                                                                                                                                    |
+| `/api/v1/query?query=...` | Raw HTTP API. The Graph UI is just a thin shell over this — copy a working PromQL into curl/jq for scripting.                                                                                     |
 
 **Workflow tip — autocompletion.** The query box has incremental
 metric-name autocomplete. Type `plmmsa_` to see every plmMSA metric
@@ -649,18 +649,18 @@ The bundled Prometheus loads
 as a `rule_files` entry. Ten rules across five groups cover the
 operational fault classes we've actually hit on this stack:
 
-| group              | rule                  | severity  | what it catches                                                   |
-| ------------------ | --------------------- | --------- | ----------------------------------------------------------------- |
-| `plmmsa-uptime`    | `ScrapeTargetDown`    | critical  | scrape target down 2m+                                            |
-| `plmmsa-errors`    | `ApiServerErrorRate`  | warning   | 5xx rate > 0 sustained                                            |
-| `plmmsa-errors`    | `WorkerJobFailures`   | warning   | worker `mark_failed` rate sustained                               |
-| `plmmsa-latency`   | `PipelineP95High`     | warning   | worker pipeline p95 > 90 s for 10 m (regression / cold cache)     |
-| `plmmsa-latency`   | `EmbeddingP95High`    | warning   | `/embed/bin` p95 > 30 s (GPU pressure)                            |
-| `plmmsa-capacity`  | `QueueBackpressure`   | warning   | queue depth > 30 (heading for `503 E_QUEUE_FULL`)                 |
-| `plmmsa-capacity`  | `QueueStuck`          | critical  | queue > 0 + zero successes in 10 m (worker hung)                  |
-| `plmmsa-gpu`       | `GpuEccErrors`        | critical  | DCGM SBE/DBE ECC counter > 0 (hardware fire alarm)                |
-| `plmmsa-gpu`       | `GpuTempHigh`         | warning   | sustained > 80 °C (RTX 6000 Ada throttles ~87 °C)                 |
-| `plmmsa-gpu`       | `GpuMemoryNearFull`   | warning   | `< 2 GiB` free for 2 m (predict OOM on next long /embed)          |
+| group             | rule                 | severity | what it catches                                               |
+| ----------------- | -------------------- | -------- | ------------------------------------------------------------- |
+| `plmmsa-uptime`   | `ScrapeTargetDown`   | critical | scrape target down 2m+                                        |
+| `plmmsa-errors`   | `ApiServerErrorRate` | warning  | 5xx rate > 0 sustained                                        |
+| `plmmsa-errors`   | `WorkerJobFailures`  | warning  | worker `mark_failed` rate sustained                           |
+| `plmmsa-latency`  | `PipelineP95High`    | warning  | worker pipeline p95 > 90 s for 10 m (regression / cold cache) |
+| `plmmsa-latency`  | `EmbeddingP95High`   | warning  | `/embed/bin` p95 > 30 s (GPU pressure)                        |
+| `plmmsa-capacity` | `QueueBackpressure`  | warning  | queue depth > 30 (heading for `503 E_QUEUE_FULL`)             |
+| `plmmsa-capacity` | `QueueStuck`         | critical | queue > 0 + zero successes in 10 m (worker hung)              |
+| `plmmsa-gpu`      | `GpuEccErrors`       | critical | DCGM SBE/DBE ECC counter > 0 (hardware fire alarm)            |
+| `plmmsa-gpu`      | `GpuTempHigh`        | warning  | sustained > 80 °C (RTX 6000 Ada throttles ~87 °C)             |
+| `plmmsa-gpu`      | `GpuMemoryNearFull`  | warning  | `< 2 GiB` free for 2 m (predict OOM on next long /embed)      |
 
 View pending + firing at **`http://localhost:${PROMETHEUS_HOST_PORT:-9091}/alerts`**.
 
@@ -693,12 +693,10 @@ A few starters from there:
 sum by (service) (rate(plmmsa_http_requests_total[1m]))
 
 # api p95 latency by route.
-histogram_quantile(0.95,
-  sum by (le, route) (rate(plmmsa_http_request_duration_seconds_bucket{service="api"}[5m])))
+histogram_quantile(0.95, sum by (le, route) (rate(plmmsa_http_request_duration_seconds_bucket{service="api"}[5m])))
 
 # Worker pipeline p95.
-histogram_quantile(0.95,
-  rate(plmmsa_worker_pipeline_duration_seconds_bucket[10m]))
+histogram_quantile(0.95, rate(plmmsa_worker_pipeline_duration_seconds_bucket[10m]))
 
 # Job throughput by terminal status (succeeded / failed / cancelled).
 rate(plmmsa_worker_jobs_processed_total[5m])

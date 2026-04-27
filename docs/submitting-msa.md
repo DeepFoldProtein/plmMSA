@@ -122,23 +122,23 @@ Response (`202 Accepted`):
 
 ### Submit fields (`/v2/msa`)
 
-| field           | required | default              | notes                                                                                 |
-| --------------- | -------- | -------------------- | ------------------------------------------------------------------------------------- |
-| `sequences`     | yes      | —                    | One string per chain. 1–N chains. AA alphabet only.                                   |
-| `models`        | no       | enabled PLMs w/ VDB  | List of PLM ids run in parallel; hits unioned by target id. Today: `ankh_cl, esm1b`. |
-| `model`         | no       | —                    | Legacy single-PLM shortcut. Equivalent to `models: ["<value>"]`.                     |
-| `output_format` | no       | `a3m`                | `a3m`. Stockholm / FASTA export is a deferred item.                                   |
-| `paired`        | no       | `false`              | Paired-by-TaxID MSA across chains. Requires ≤16 chains.                               |
-| `query_id`      | no       | `query`              | FASTA header id in the emitted A3M.                                                   |
-| `collection`    | no       | `<model>_uniref50`   | Single-PLM collection override. Ignored when `models` has >1 entry.                  |
-| `collections`   | no       | `{}`                 | Per-model VDB collection map: `{"ankh_cl":"ankh_uniref50", ...}`.                    |
-| `k`             | no       | `1000`               | FAISS neighbors to fetch **per model**. Typical 500–2000; max 10000.                  |
-| `aligner`       | no       | `plmalign`           | `plmalign`, `plm_blast`, or `otalign`.                                                |
-| `mode`          | no       | `local`              | `local` / `global` (all aligners) · `glocal` / `q2t` / `t2q` (OTalign only; other aligners 400 on these). No silent remap — OTalign honors the mode verbatim. |
-| `score_model`   | no       | aligner default      | PLM used to build the score matrix. `plmalign`/`plm_blast` default to `prott5` (shard store); `otalign` defaults to `ankh_large` (live re-embed). Pass `""` to disable cross-PLM scoring. |
-| `filter_by_score` | no     | `true`               | Apply Algorithm 1 step 5 filter: drop hits with score below `min(0.2·len(Q), 8.0)`. Per-aligner enable is in `[aligners.*].filter_enabled` — OTalign is off because its transport-mass score lives on a different scale. Per-request `false` always wins. |
-| `options`       | no       | `{}`                 | Aligner kwargs: `gap_open`, `gap_extend`, `normalize`, ...                            |
-| `force_recompute` | no     | `false`              | Bypass the completed-MSA result cache and always run the pipeline. On success the fresh result still overwrites the cache entry. Useful for reproducing or retrying after a pipeline change. |
+| field             | required | default             | notes                                                                                                                                                                                                                                                     |
+| ----------------- | -------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sequences`       | yes      | —                   | One string per chain. 1–N chains. AA alphabet only.                                                                                                                                                                                                       |
+| `models`          | no       | enabled PLMs w/ VDB | List of PLM ids run in parallel; hits unioned by target id. Today: `ankh_cl, esm1b`.                                                                                                                                                                      |
+| `model`           | no       | —                   | Legacy single-PLM shortcut. Equivalent to `models: ["<value>"]`.                                                                                                                                                                                          |
+| `output_format`   | no       | `a3m`               | `a3m`. Stockholm / FASTA export is a deferred item.                                                                                                                                                                                                       |
+| `paired`          | no       | `false`             | Paired-by-TaxID MSA across chains. Requires ≤16 chains.                                                                                                                                                                                                   |
+| `query_id`        | no       | `query`             | FASTA header id in the emitted A3M.                                                                                                                                                                                                                       |
+| `collection`      | no       | `<model>_uniref50`  | Single-PLM collection override. Ignored when `models` has >1 entry.                                                                                                                                                                                       |
+| `collections`     | no       | `{}`                | Per-model VDB collection map: `{"ankh_cl":"ankh_uniref50", ...}`.                                                                                                                                                                                         |
+| `k`               | no       | `1000`              | FAISS neighbors to fetch **per model**. Typical 500–2000; max 10000.                                                                                                                                                                                      |
+| `aligner`         | no       | `plmalign`          | `plmalign`, `plm_blast`, or `otalign`.                                                                                                                                                                                                                    |
+| `mode`            | no       | `local`             | `local` / `global` (all aligners) · `glocal` / `q2t` / `t2q` (OTalign only; other aligners 400 on these). No silent remap — OTalign honors the mode verbatim.                                                                                             |
+| `score_model`     | no       | aligner default     | PLM used to build the score matrix. `plmalign`/`plm_blast` default to `prott5` (shard store); `otalign` defaults to `ankh_large` (live re-embed). Pass `""` to disable cross-PLM scoring.                                                                 |
+| `filter_by_score` | no       | `true`              | Apply the post-alignment score-threshold filter. Cutoff is aligner-specific: PLMAlign / pLM-BLAST use upstream Algorithm 1 step 5 (`min(0.2·len(Q), 8.0)`); OTalign uses its calibrated transport-mass floor (`[aligners.otalign].filter_threshold`, default `0.25`). Per-aligner enable is in `[aligners.*].filter_enabled`. Per-request `false` always wins. |
+| `options`         | no       | `{}`                | Aligner kwargs: `gap_open`, `gap_extend`, `normalize`, ...                                                                                                                                                                                                |
+| `force_recompute` | no       | `false`             | Bypass the completed-MSA result cache and always run the pipeline. On success the fresh result still overwrites the cache entry. Useful for reproducing or retrying after a pipeline change.                                                              |
 
 **How multi-model aggregation works.** Each model runs its own pipeline
 (embed → search → fetch → embed targets → align) in parallel. After all
@@ -153,13 +153,13 @@ returns whatever the surviving models produced.
 
 `result.stats` includes the filter trace:
 
-| field              | meaning                                                                 |
-| ------------------ | ----------------------------------------------------------------------- |
-| `hits_pre_filter`  | Aligned hit count before Algorithm 1 step 5 filter.                     |
-| `hits_post_filter` | Count after the filter (same as `hits_fetched`).                        |
-| `filter_by_score`  | Request-level flag (`filter_by_score` field on the submit).              |
-| `filter_applied`   | `true` only when both the request flag and the aligner's `filter_enabled` are true. |
-| `filter_threshold` | `min(0.2 · len(Q), 8.0)` — same scale as hit scores.                    |
+| field              | meaning                                                                                                                                                                                                                       |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hits_pre_filter`  | Aligned hit count before the post-alignment score filter.                                                                                                                                                                     |
+| `hits_post_filter` | Count after the filter (same as `hits_fetched`).                                                                                                                                                                              |
+| `filter_by_score`  | Request-level flag (`filter_by_score` field on the submit).                                                                                                                                                                   |
+| `filter_applied`   | `true` only when both the request flag and the aligner's `filter_enabled` are true.                                                                                                                                           |
+| `filter_threshold` | Aligner-specific cutoff actually used: `min(0.2 · len(Q), 8.0)` for PLMAlign / pLM-BLAST (dot-product scale), the configured fixed floor for OTalign (`0.25` by default, transport-mass scale).                               |
 | `cache_hit`        | `true` when the server served this MSA from the result cache (`cache-emb`) instead of running the pipeline. Absent on fresh compute. The job record's `started_at` and `finished_at` collapse to the same timestamp on a hit. |
 
 A3M rows carry the raw alignment score in the FASTA header
@@ -399,13 +399,13 @@ through to the DP — no silent substitution.
 {"sequences": ["MKT..."], "aligner": "otalign", "mode": "glocal"}
 ```
 
-| mode     | when to pick                                                  |
-| -------- | ------------------------------------------------------------- |
-| `local`  | SW-style. Free start + end, negative-floor clamp.             |
-| `global` | NW. Pay end-gap cost on both sides.                           |
+| mode     | when to pick                                                      |
+| -------- | ----------------------------------------------------------------- |
+| `local`  | SW-style. Free start + end, negative-floor clamp.                 |
+| `global` | NW. Pay end-gap cost on both sides.                               |
 | `glocal` | Semi-global. Free end-gaps both sides (upstream OTalign default). |
-| `q2t`    | Free query end-gap only (template is global).                 |
-| `t2q`    | Free template end-gap only (query is global).                 |
+| `q2t`    | Free query end-gap only (template is global).                     |
+| `t2q`    | Free template end-gap only (query is global).                     |
 
 PLMAlign / pLM-BLAST only support `local` / `global` and 400 on the three
 OTalign-only modes.
@@ -421,11 +421,11 @@ OTalign-only modes.
 PLMAlign can score the query-vs-target residue-pair matrix three ways.
 Default follows upstream PLMAlign. Override per job via `options.score_matrix`:
 
-| mode | what it does | typical use |
-| --- | --- | --- |
+| mode                   | what it does                                                                                                  | typical use                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `dot_zscore` (default) | raw `q @ t.T` then global Z-score `(S - mean)/(std + 1e-3)` — centers the matrix around 0 with ~unit variance | same convention as upstream PLMAlign; scores are comparable across jobs |
-| `cosine` | L2-normalize each per-residue vector, then dot product. Scores live in `[-1, 1]` | easier to reason about for gap tuning; robust to PLM-magnitude drift |
-| `dot` | raw dot product, no normalization | debug / research only — score scale tracks embedding magnitudes |
+| `cosine`               | L2-normalize each per-residue vector, then dot product. Scores live in `[-1, 1]`                              | easier to reason about for gap tuning; robust to PLM-magnitude drift    |
+| `dot`                  | raw dot product, no normalization                                                                             | debug / research only — score scale tracks embedding magnitudes         |
 
 Example:
 
