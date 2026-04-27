@@ -38,6 +38,12 @@ class AlignerEntry(BaseModel):
     # scale so its default is off. Per-request `filter_by_score`
     # always wins over this setting.
     filter_enabled: bool = False
+    # Optional fixed score-threshold floor for the post-align filter.
+    # `None` (default) → use the upstream PLMAlign rule
+    # `min(0.2 * len(Q), 8.0)` (calibrated for dot-product scores).
+    # A float overrides the rule with a constant cutoff — used by
+    # OTalign whose transport-plan-mass score is on a different scale.
+    filter_threshold: float | None = None
 
 
 class PlmAlignEntry(AlignerEntry):
@@ -92,9 +98,13 @@ class OTAlignEntry(AlignerEntry):
 
     # OTalign's score is sum of transport-plan mass on matched cells
     # (range ~[0, 1]); the upstream PLMAlign threshold zeroes every
-    # hit on this scale, so leave the filter off until an OTalign-
-    # specific calibration is dialed in.
-    filter_enabled: bool = False
+    # hit on this scale, so OTalign uses its own calibrated cutoff
+    # (`filter_threshold` below) instead of the length-dependent rule.
+    filter_enabled: bool = True
+    # OTalign-specific fixed cutoff in transport-plan-mass units.
+    # 0.25 is the calibrated floor where hit quality stops degrading
+    # gracefully and starts emitting near-random alignments.
+    filter_threshold: float | None = 0.25
     # OTalign upstream (DeepFoldProtein/OTalign) pairs with Ankh-Large
     # embeddings by default; fp16 is acceptable on this model family.
     score_model: str = "ankh_large"

@@ -33,8 +33,15 @@
           <label>
             <span>Aligner</span>
             <select id="aligner" name="aligner">
-              <option value="plmalign" selected>PLMAlign (fast, ProtT5)</option>
-              <option value="otalign">OTalign (Sinkhorn, Ankh-Large)</option>
+              <option value="plmalign" data-aligner="plmalign" selected>
+                PLMAlign (fast, ProtT5)
+              </option>
+              <option value="otalign" data-aligner="otalign">
+                OTalign (Sinkhorn, Ankh-Large)
+              </option>
+              <option value="otalign-prott5" data-aligner="otalign" data-score-model="prott5">
+                OTalign (Sinkhorn, ProtT5)
+              </option>
             </select>
           </label>
           <label>

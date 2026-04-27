@@ -57,9 +57,12 @@ score_matrix_device = "cpu"
 display_name = "OTalign (unbalanced Sinkhorn + position-specific DP)"
 enabled = true
 # OTalign's score is transport-plan mass sum (~[0, 1]); the upstream
-# (0.2*L, 8.0) threshold zeroes every hit on this scale. Off until
-# an OTalign-specific calibration is dialed in.
-filter_enabled = false
+# (0.2*L, 8.0) rule zeroes every hit on this scale, so OTalign rides
+# the fixed-threshold path below instead.
+filter_enabled = true
+# Fixed score floor in transport-mass units. 0.25 is the calibrated
+# cutoff where hit quality stops degrading gracefully.
+filter_threshold = 0.25
 # FlashSinkhorn (torch.compile fused iteration chunks). ~3-5x faster
 # on CUDA at CASP15 matrix sizes. Adds ~3-10s startup warmup. Leave
 # off until cross-validated on the full regression fixture set.

@@ -185,6 +185,54 @@ histogram_quantile(0.10, rate(plmmsa_worker_pipeline_duration_seconds_bucket[10m
 sum(rate(plmmsa_http_requests_total[1m]))
 ```
 
+## Per-job timing — Prometheus vs. the API
+
+Prometheus stores **distributions**, not per-job records. To answer
+"how long did job `<id>` take", hit the API:
+
+```bash
+curl -s http://localhost:8080/v2/msa/<id> \
+  | python -c "import json,sys; d=json.load(sys.stdin); \
+      c, s, f = d['created_at'], d.get('started_at'), d.get('finished_at'); \
+      print('queue_wait:', round((s or 0)-(c or 0), 2), 's'); \
+      print('runtime:   ', round((f or 0)-(s or 0), 2), 's')"
+```
+
+`runtime` is the same wall time the worker observes into
+`plmmsa_worker_pipeline_duration_seconds`; `queue_wait` is **not**
+instrumented as a metric today (only the post-claim runtime is).
+
+Prometheus-side equivalents — useful for sanity-checking that a single
+recent job moved the histogram, or for steady-state aggregates:
+
+```promql
+# Last-job runtime fingerprint. The histogram's _count + _sum tell you
+# how many jobs are in the window and their total wall time. Filter to
+# the worker scrape target so the empty api/embedding/vdb/align series
+# don't dilute the read.
+plmmsa_worker_pipeline_duration_seconds_count{instance="worker:9090"}
+plmmsa_worker_pipeline_duration_seconds_sum{instance="worker:9090"}
+```
+
+```promql
+# Mean runtime over the last 10 min (sum / count is the textbook
+# histogram mean — fine for "are jobs ~30s or ~300s lately").
+rate(plmmsa_worker_pipeline_duration_seconds_sum[10m])
+  /
+rate(plmmsa_worker_pipeline_duration_seconds_count[10m])
+```
+
+```promql
+# Cumulative job count by terminal status — at any point in time,
+# `succeeded - prev_succeeded` over a window equals jobs finished there.
+plmmsa_worker_jobs_processed_total{status="succeeded"}
+```
+
+> Per-job introspection from the API is authoritative; Prometheus
+> tells you about the population. If you need *every* job's timing
+> for offline analysis, scrape `/v2/msa/{id}` for the ids you care
+> about — there is no time-series export of individual jobs.
+
 ## PromQL working tips
 
 - **Range vector windows.** `[1m]` is twitchy and noisy; `[5m]` is the

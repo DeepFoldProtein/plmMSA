@@ -204,13 +204,21 @@ async def _main() -> None:
     if shard_models:
         logger.info("worker: shard-first target fetch enabled for %s", sorted(shard_models))
     # Collect the set of aligners whose post-score filter is enabled
-    # in settings. OTalign defaults off because its score scale doesn't
-    # match the upstream (0.2*L, 8.0) calibration.
+    # in settings, plus any per-aligner fixed thresholds (OTalign rides
+    # the fixed path because its transport-mass score is on a different
+    # scale than the upstream (0.2*L, 8.0) dot-product calibration).
+    aligner_ids = ("plmalign", "plm_blast", "otalign")
     filter_enabled_aligners = frozenset(
         aid
-        for aid in ("plmalign", "plm_blast", "otalign")
+        for aid in aligner_ids
         if getattr(getattr(settings.aligners, aid, None), "filter_enabled", False)
     )
+    filter_thresholds: dict[str, float] = {}
+    for aid in aligner_ids:
+        entry = getattr(settings.aligners, aid, None)
+        threshold = getattr(entry, "filter_threshold", None)
+        if threshold is not None:
+            filter_thresholds[aid] = float(threshold)
     orchestrator = Orchestrator(
         config=OrchestratorConfig(
             embedding_url=os.environ.get("EMBEDDING_URL", "http://embedding:8081"),
@@ -221,6 +229,7 @@ async def _main() -> None:
             paired_k_multiplier=settings.queue.paired_k_multiplier,
             shard_models=shard_models,
             filter_enabled_aligners=filter_enabled_aligners,
+            filter_thresholds=filter_thresholds,
             # score_model is resolved at the API edge per-aligner and
             # stamped into the job payload. cfg.score_model stays empty as
             # a no-op safety belt for non-API callers (bench scripts).

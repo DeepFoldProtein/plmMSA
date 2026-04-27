@@ -19,7 +19,10 @@ console.log("plmMSA UI: app.js loaded");
   const POLL_HIDDEN_MS = 60000;
   const TERMINAL = new Set(["succeeded", "failed", "cancelled"]);
   // Only these modes are universal. glocal/q2t/t2q are OTalign-only —
-  // we hide them when PLMAlign is the selected aligner.
+  // we hide them when PLMAlign is the selected aligner. The picker is
+  // keyed by the underlying aligner kind (data-aligner on each option),
+  // not the option `value`, so a "otalign-prott5" entry still resolves
+  // to the otalign mode set.
   const ALIGNER_MODES = {
     plmalign: ["local", "global"],
     otalign: ["local", "global", "glocal", "q2t", "t2q"],
@@ -28,6 +31,16 @@ console.log("plmMSA UI: app.js loaded");
     plmalign: "global",
     otalign: "glocal",
   };
+
+  function selectedAlignerKind() {
+    const opt = alignerSel.options[alignerSel.selectedIndex];
+    return (opt && opt.dataset.aligner) || alignerSel.value;
+  }
+
+  function selectedScoreModel() {
+    const opt = alignerSel.options[alignerSel.selectedIndex];
+    return (opt && opt.dataset.scoreModel) || null;
+  }
 
   /* --- localStorage-backed job cache --- */
 
@@ -110,7 +123,7 @@ console.log("plmMSA UI: app.js loaded");
   /* --- Mode picker auto-hide --- */
 
   function refreshModeOptions({ applyDefault = false } = {}) {
-    const aligner = alignerSel.value;
+    const aligner = selectedAlignerKind();
     const allowed = new Set(ALIGNER_MODES[aligner] || ["local", "global"]);
     for (const opt of modeSel.options) {
       const only = opt.dataset.only;
@@ -134,11 +147,13 @@ console.log("plmMSA UI: app.js loaded");
       const seq = parseSeqInput(seqInput.value);
       const body = {
         sequences: [seq],
-        aligner: alignerSel.value,
+        aligner: selectedAlignerKind(),
         mode: modeSel.value,
         k: parseInt(kInput.value || "1000", 10),
         filter_by_score: filterCb.checked,
       };
+      const scoreModel = selectedScoreModel();
+      if (scoreModel) body.score_model = scoreModel;
       const resp = await fetch("/v2/msa", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

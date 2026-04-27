@@ -40,6 +40,25 @@ def _score_threshold(query_len: int) -> float:
     return min(0.2 * float(query_len), 8.0)
 
 
+def _resolve_filter_threshold(
+    aligner: str,
+    query_len: int,
+    fixed_thresholds: dict[str, float],
+) -> float:
+    """Pick the post-align score floor for `aligner`.
+
+    A fixed float in `fixed_thresholds` (set per-aligner via
+    `[aligners.*].filter_threshold`) wins; absent or `None` falls
+    through to the upstream length-dependent rule. OTalign rides the
+    fixed path because its transport-plan-mass score is on a
+    different scale than the dot-product calibration.
+    """
+    explicit = fixed_thresholds.get(aligner)
+    if explicit is not None:
+        return float(explicit)
+    return _score_threshold(query_len)
+
+
 def _columns_in_bounds(
     columns: list[tuple[int, int]],
     query_len: int,
@@ -100,6 +119,12 @@ class OrchestratorConfig:
     # settings.toml. Empty default keeps tests / non-API callers in
     # their pre-settings "no filter" behavior.
     filter_enabled_aligners: frozenset[str] = field(default_factory=frozenset)
+    # Per-aligner fixed score thresholds. Aligner ids mapped to a
+    # constant cutoff override the upstream `min(0.2 * len(Q), 8.0)`
+    # rule (which only makes sense on dot-product scores). OTalign is
+    # the canonical user — its transport-mass score is calibrated at
+    # 0.25 in `[aligners.otalign].filter_threshold`.
+    filter_thresholds: dict[str, float] = field(default_factory=dict)
     # Paired-MSA retrieval multiplier. Per-chain retrieval uses
     # `paired_k = multiplier * effective_k` so taxonomy-join filtering
     # still yields a useful pool. 3x matches upstream MMseqs2 tuning.
@@ -284,7 +309,9 @@ class Orchestrator:
         # its score scale differs). Per-request `filter_by_score` must
         # also be true; either false disables the filter.
         hits_pre_filter = len(merged_hits)
-        filter_threshold = _score_threshold(len(query_seq))
+        filter_threshold = _resolve_filter_threshold(
+            aligner, len(query_seq), cfg.filter_thresholds
+        )
         filter_applied = filter_by_score and aligner in cfg.filter_enabled_aligners
         if filter_applied:
             merged_hits = [h for h in merged_hits if h.score >= filter_threshold]
@@ -589,7 +616,9 @@ class Orchestrator:
                     hits_fetched=0,
                     hits_pre_filter=0,
                     filter_applied=False,
-                    filter_threshold=_score_threshold(len(query_seq)),
+                    filter_threshold=_resolve_filter_threshold(
+                        aligner, len(query_seq), self._config.filter_thresholds
+                    ),
                     per_retrieval_stats=per_retrieval_stats,
                     query_self_score=query_self_score,
                 )
@@ -620,7 +649,9 @@ class Orchestrator:
                     hits_fetched=0,
                     hits_pre_filter=0,
                     filter_applied=False,
-                    filter_threshold=_score_threshold(len(query_seq)),
+                    filter_threshold=_resolve_filter_threshold(
+                        aligner, len(query_seq), self._config.filter_thresholds
+                    ),
                     per_retrieval_stats=per_retrieval_stats,
                     query_self_score=query_self_score,
                 )
@@ -685,7 +716,9 @@ class Orchestrator:
         # Upstream PLMAlign Algorithm 1 step 5. Per-aligner toggle
         # via settings; per-request `filter_by_score` must also be true.
         hits_pre_filter = len(hits)
-        filter_threshold = _score_threshold(len(query_seq))
+        filter_threshold = _resolve_filter_threshold(
+            aligner, len(query_seq), self._config.filter_thresholds
+        )
         filter_applied = filter_by_score and aligner in self._config.filter_enabled_aligners
         if filter_applied:
             hits = [h for h in hits if h.score >= filter_threshold]

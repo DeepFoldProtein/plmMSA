@@ -143,10 +143,12 @@ class SubmitRequest(BaseModel):
     filter_by_score: bool = Field(
         True,
         description=(
-            "Apply upstream PLMAlign's score-threshold filter on hits "
-            "(Algorithm 1 step 5): keep only hits with "
-            "score >= min(0.2 * len(query), 8.0). Default true. Set false "
-            "to return every aligned hit (legacy behavior)."
+            "Apply the post-alignment score-threshold filter. The cutoff "
+            "is aligner-specific: PLMAlign / pLM-BLAST use upstream "
+            "Algorithm 1 step 5 (`min(0.2 * len(query), 8.0)`), OTalign "
+            "uses its calibrated transport-mass floor "
+            "(`[aligners.otalign].filter_threshold`, 0.25 by default). "
+            "Set false to return every aligned hit."
         ),
     )
     force_recompute: bool = Field(
