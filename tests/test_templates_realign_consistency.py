@@ -152,15 +152,12 @@ async def test_full_fixture_runs_end_to_end() -> None:
         "supposed to be < 10% on this fixture per §6.2"
     )
 
+    # Output mirrors the hmmsearch a3m shape — no query record at top.
     lines = result.payload.splitlines()
-    assert lines[0] == ">exostosin_query"
-    assert lines[1] == _FIXTURE_QUERY
-
-    # Walk the output records and pin row-level invariants.
     qlen = len(_FIXTURE_QUERY)
     headers: list[str] = []
     rows: list[str] = []
-    for ln in lines[2:]:
+    for ln in lines:
         if ln.startswith(">"):
             headers.append(ln)
         else:
@@ -217,7 +214,7 @@ async def test_identity_distribution_against_query() -> None:
     qlen = len(_FIXTURE_QUERY)
     rows = [
         ln
-        for ln in result.payload.splitlines()[2:]
+        for ln in result.payload.splitlines()
         if not ln.startswith(">")
     ]
     assert rows, "no rendered rows — earlier invariants should have caught this"

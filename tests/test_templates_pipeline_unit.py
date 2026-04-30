@@ -178,15 +178,15 @@ async def test_happy_path_two_records() -> None:
     assert transport.align_calls[0].aligner == "otalign"
     assert transport.align_calls[0].n_targets == 2
 
-    # Output A3M has query record + 2 hit rows.
+    # Output A3M is just the 2 hit rows — no query record (the input
+    # hmmsearch a3m doesn't have one, and the output mirrors the
+    # input shape).
     lines = result.payload.splitlines()
-    assert lines[0] == ">Q"
-    assert lines[1] == query
-    assert lines[2].startswith(">t1/")
-    assert lines[3].startswith("ABCDE")  # diagonal stub places residues at positions 0..4
-    assert lines[4].startswith(">t2/")
-    assert lines[5].startswith("FGHIJ")  # diagonal stub also starts at (0, 0)
-    assert all(len(row) == len(query) for row in (lines[3], lines[5]))
+    assert lines[0].startswith(">t1/")
+    assert lines[1].startswith("ABCDE")  # diagonal stub places residues at positions 0..4
+    assert lines[2].startswith(">t2/")
+    assert lines[3].startswith("FGHIJ")
+    assert all(len(row) == len(query) for row in (lines[1], lines[3]))
 
     assert result.stats["records_kept"] == 2
     assert result.stats["records_dropped_sanity"] == 0
@@ -213,7 +213,9 @@ async def test_query_normalized_upper_and_gaps_stripped() -> None:
     )
     assert transport.embed_calls[0].sequences[0] == "ABCDEFGHIJ"
     assert result.stats["query_length"] == 10
-    assert result.payload.splitlines()[1] == "ABCDEFGHIJ"
+    # Query is normalized for embedding but does NOT appear in the
+    # output payload (output mirrors hmmsearch shape).
+    assert "ABCDEFGHIJ" not in result.payload.splitlines()
 
 
 @pytest.mark.asyncio
@@ -359,12 +361,10 @@ async def test_sanity_failed_records_drop_but_job_survives() -> None:
     assert result.stats["records_in"] == 3
     assert result.stats["records_kept"] == 2
     assert result.stats["records_dropped_sanity"] == 1
-    # Output: query + 2 hit rows = 6 lines (4 records × 2 lines − 2 from
-    # the dropped record).
+    # Output: 2 hit rows = 4 lines (no query record at top).
     body = result.payload.splitlines()
-    assert body[0] == ">Q"
-    assert ">t1/" in body[2]
-    assert ">t2/" in body[4]
+    assert body[0].startswith(">t1/")
+    assert body[2].startswith(">t2/")
     assert ">bad/" not in result.payload
 
 
@@ -395,8 +395,8 @@ async def test_records_with_no_match_are_dropped_from_output() -> None:
     )
     assert result.stats["records_kept"] == 0
     assert result.stats["records_dropped_no_match"] == 2
-    # Output is just the query record.
-    assert result.payload.splitlines() == [">Q", "ABC"]
+    # No records survive → output is empty.
+    assert result.payload == ""
 
 
 # ---------------------------------------------------------------------------
@@ -423,9 +423,9 @@ async def test_dedup_of_identical_templates_embeds_once() -> None:
     assert transport.align_calls[0].n_targets == 3
     # Output: 3 hit rows, headers re-intervalled to their respective starts.
     body = result.payload.splitlines()
-    assert ">t1/10-" in body[2]
-    assert ">t2/20-" in body[4]
-    assert ">t3/30-" in body[6]
+    assert ">t1/10-" in body[0]
+    assert ">t2/20-" in body[2]
+    assert ">t3/30-" in body[4]
     assert result.stats["unique_template_seqs"] == 2
 
 
@@ -445,10 +445,8 @@ async def test_single_record() -> None:
         )
     )
     body = result.payload.splitlines()
-    assert body[0] == ">Q"
+    assert body[0].startswith(">t/")
     assert body[1] == "ABC"
-    assert body[2].startswith(">t/")
-    assert body[3] == "ABC"
 
 
 @pytest.mark.asyncio
@@ -465,7 +463,7 @@ async def test_one_residue_query_and_template() -> None:
     )
     assert result.stats["records_kept"] == 1
     body = result.payload.splitlines()
-    assert body == [">Q", "M", ">t/1-1 Score=0.500", "M"]
+    assert body == [">t/1-1 Score=0.500", "M"]
 
 
 # ---------------------------------------------------------------------------
@@ -536,7 +534,8 @@ async def test_output_rows_have_no_lowercase() -> None:
         )
     )
     body = result.payload.splitlines()
-    hit_row = body[3]
+    # body[0] is the header, body[1] is the hit row.
+    hit_row = body[1]
     assert len(hit_row) == 3
     # Only uppercase or `-` allowed.
     assert all(c == "-" or c.isupper() for c in hit_row)
@@ -569,8 +568,7 @@ async def test_default_preserves_input_order() -> None:
         TemplatesRealignRequest(query_id="Q", query_sequence="A", a3m=text)
     )
     headers = [ln for ln in result.payload.splitlines() if ln.startswith(">")]
-    # Skip the query header at index 0; rest should be in input order.
-    assert headers[1:] == [
+    assert headers == [
         ">first/1-1 Score=0.300",
         ">second/1-1 Score=0.200",
         ">third/1-1 Score=0.100",
@@ -606,14 +604,14 @@ async def test_sort_by_score_emits_best_hit_first() -> None:
         )
     )
     headers = [ln for ln in result.payload.splitlines() if ln.startswith(">")]
-    # Highest score is `first` (0.3), then `second` (0.2), then `third` (0.1).
-    # In this stub the input order is already score-descending — but the
-    # input that produced THIS test mocks scores in reverse so input
-    # order is `first(0.3) second(0.2) third(0.1)` and after a sort
-    # they remain in the same order. So vary it: rewrite the stub to
-    # mock scores 0.1, 0.3, 0.2 — let's adjust below.
-    # (See the dedicated test below for a non-trivial reorder pin.)
-    assert headers[0] == ">Q"
+    # In this stub, input order is already score-descending
+    # (first=0.3, second=0.2, third=0.1) so a sort is a no-op. The
+    # dedicated reorder test below pins a non-trivial reorder.
+    assert headers == [
+        ">first/1-1 Score=0.300",
+        ">second/1-1 Score=0.200",
+        ">third/1-1 Score=0.100",
+    ]
     assert result.stats["sort_by_score"] is True
 
 
@@ -647,9 +645,11 @@ async def test_sort_by_score_actually_reorders() -> None:
         )
     )
     headers = [ln for ln in result.payload.splitlines() if ln.startswith(">")]
-    assert headers[1] == ">b/1-1 Score=0.900"
-    assert headers[2] == ">c/1-1 Score=0.500"
-    assert headers[3] == ">a/1-1 Score=0.100"
+    assert headers == [
+        ">b/1-1 Score=0.900",
+        ">c/1-1 Score=0.500",
+        ">a/1-1 Score=0.100",
+    ]
 
 
 @pytest.mark.asyncio
@@ -684,7 +684,7 @@ async def test_header_reintervals_with_target_span() -> None:
             a3m=_a3m(("t", 100, 104, "ABCab")),
         )
     )
-    header = result.payload.splitlines()[2]
+    header = result.payload.splitlines()[0]
     # span = (1, 3) → new_start = 100+1 = 101; new_end = 100+3 = 103.
     assert header.startswith(">t/101-103 ")
     assert "Score=0.750" in header

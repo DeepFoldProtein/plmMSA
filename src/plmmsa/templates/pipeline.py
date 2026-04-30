@@ -235,14 +235,18 @@ class TemplatesRealignOrchestrator:
         if request.sort_by_score:
             out_records.sort(key=lambda t: -t[3])
 
-        # Step 9 — assemble. Query record at top (no Score= — the query
-        # has no alignment to itself in this pipeline; downstream tools
-        # don't expect one).
-        lines: list[str] = [f">{request.query_id}", query_seq]
+        # Step 9 — assemble. Output mirrors hmmsearch's a3m shape: just
+        # the template records, re-rendered. The endpoint is "re-align
+        # an existing hmmsearch a3m" — the caller already has the query
+        # and gave it to us as `query_sequence`, so emitting it back is
+        # noise. Callers that need a ColabFold/AlphaFold-style A3M
+        # (query at index 0) can prepend `>{query_id}\n{query_seq}`
+        # themselves.
+        lines: list[str] = []
         for _r, header, row, _score in out_records:
             lines.append(header)
             lines.append(row)
-        payload = "\n".join(lines) + "\n"
+        payload = ("\n".join(lines) + "\n") if lines else ""
 
         stats = {
             "pipeline": "templates_realign",

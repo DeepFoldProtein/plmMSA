@@ -47,7 +47,7 @@ Content-Type: application/json
 200 OK
 {
   "format": "a3m",
-  "payload": ">T1104\nMAQ...\n>7sch_A/55-680 ... Score=0.875\n...\n",
+  "payload": ">7sch_A/55-680 Score=0.875 [subseq from] mol:protein length:720  Exostosin-1\nSPRQ...\n>...",
   "stats": {
     "pipeline": "templates_realign",
     "query_length": 649,
@@ -63,18 +63,22 @@ Content-Type: application/json
 }
 ```
 
-The output A3M follows two invariants downstream tools can rely on:
+The output A3M follows three invariants downstream tools can rely on:
 
+- **The output mirrors the hmmsearch input shape** — just the template
+  records, re-rendered. No query record at the top (the input doesn't
+  have one either; the endpoint takes the query as a separate field).
+  If your downstream tool expects a ColabFold/AlphaFold-style A3M with
+  the query at index 0, prepend it client-side.
 - **Every row is exactly `query_length` characters** drawn from
   `[A-Z-]`. No lowercase A3M insertions appear in the output — template
   residues that OTalign couldn't place at a query column are dropped
   (PLAN §2). Use [`POST /v2/msa`](submitting-msa.md) instead if you
   need lowercase-insert preservation.
 - **Every header carries `Score=...`** in the canonical `{:.3f}`
-  format and a re-intervalled `/start-end` reflecting the placed
-  template residues. The domain id and every other tail token
-  (`mol:protein`, `length:N`, free-text description) survive
-  byte-for-byte.
+  format adjacent to a re-intervalled `/start-end`. The domain id and
+  every other tail token (`mol:protein`, `length:N`, free-text
+  description) survive byte-for-byte.
 
 ## Errors
 

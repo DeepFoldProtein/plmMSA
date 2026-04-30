@@ -166,23 +166,31 @@ The legacy hmmsearch dump has no separate query header, so we expect
   │       simplicity of a single A3M-compatible header.
   │
   └─ assemble output A3M
-        • header preserved verbatim except for two surgical edits:
+        • Output **mirrors hmmsearch's a3m shape**: just the template
+          records, re-rendered. No query record prepended — the
+          endpoint is "re-align an existing hmmsearch a3m" and the
+          caller already has the query. Callers that need a
+          ColabFold/AlphaFold-style A3M (query at index 0) can prepend
+          `>{query_id}\n{query_seq}` themselves.
+        • Header preserved verbatim except for two surgical edits:
               (1) `/start-end` → `/new_start-new_end` (re-intervalled).
-              (2) `Score=…` token: stripped if present, then re-stamped at
-                  the end with the new value.
+              (2) `Score=N.NNN` inserted right after the `/start-end`
+                  token, before the description tail. Any prior
+                  `Score=` / `score=` tokens anywhere in the header are
+                  stripped first.
           Everything else stays — the **domain name / id** (`7sch_A`),
           the `[subseq from]` annotation, `mol:protein`, the `length:N`
           token (full-protein length from the PDB header), the
           human-readable description (`Exostosin-1`), and any other
           provenance tokens hmmsearch wrote. Downstream tools that key
           on the domain name or description don't see a difference.
-        • A3M-row length invariant. `render_hit` always emits exactly
-          `query_len` match-state slots: any query column that OTalign's
-          path didn't visit is represented as `-` (gap) in that slot. So
-          `upper+gap == query_len` holds for every output row, even when
-          q2t leaves query end-residues unaligned. No row needs manual
-          padding past what `render_hit` already produces, but the
-          invariant is explicitly tested (§6.4 / §6.5 / §6.6).
+        • A3M-row length invariant. `render_hit_match_only` always
+          emits exactly `query_len` match-state slots: any query
+          column that OTalign's path didn't visit is represented as
+          `-` (gap) in that slot. So `upper+gap == query_len` holds
+          for every output row. No row needs manual padding past what
+          the renderer already produces, but the invariant is
+          explicitly tested (§6.4 / §6.5 / §6.6).
         • query record prepended:
               >{query_id} Score={query_self_score:.3f}
               {query_seq}
