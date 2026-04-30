@@ -16,12 +16,25 @@ from plmmsa.templates.a3m_parser import (
     parse_hmmsearch_a3m,
 )
 from plmmsa.templates.header import reinterval_header, stamp_score
+from plmmsa.templates.pipeline import (
+    TemplatesRealignConfig,
+    TemplatesRealignOrchestrator,
+    TemplatesRealignRequest,
+    TemplatesRealignResult,
+)
 from plmmsa.templates.render import kept_template_span, render_hit_match_only
+from plmmsa.templates.transport import HttpTransport, TemplatesTransport
 
 __all__ = [
     "DroppedRecord",
+    "HttpTransport",
     "ParseResult",
     "Record",
+    "TemplatesRealignConfig",
+    "TemplatesRealignOrchestrator",
+    "TemplatesRealignRequest",
+    "TemplatesRealignResult",
+    "TemplatesTransport",
     "columns_from_a3m_row",
     "kept_template_span",
     "parse_hmmsearch_a3m",
