@@ -171,9 +171,20 @@ with open("realigned.a3m", "w") as f:
 
 ## Sample output
 
-After running the orchestrator on the bundled fixture
-([`tests/data/templates_realign/exostosin_hmmsearch.a3m`](../tests/data/templates_realign/exostosin_hmmsearch.a3m))
-you can inspect the realignment at
-[`tmp/exostosin_realigned.a3m`](../tmp/exostosin_realigned.a3m) (created
-by `bin/realign_fixture.py`). All 593 records survive; the output A3M
-is what an external client would receive over HTTP.
+[`bin/realign_fixture.py`](../bin/realign_fixture.py) runs the
+orchestrator end-to-end on the bundled fixture and writes the result
+to `tmp/exostosin_realigned.a3m` (gitignored — reproduce locally):
+
+```bash
+PLMMSA_TEST_EMBEDDING_URL=http://172.28.0.3:8081 \
+PLMMSA_TEST_ALIGN_URL=http://172.28.0.7:8083    \
+    uv run python bin/realign_fixture.py
+```
+
+On a single Ada GPU the 593-record fixture re-aligns in ~12 s. All
+records survive (the no-match drop is 0 on this fixture, well below
+the 10% floor §6.6 enforces). Records that share residues with the
+query get the top score (`6.398` for the five PDB chains identical
+to the query); a typical distant-homolog record (e.g. `1omx_A`,
+"Alpha-1,4-N-acetylhexosaminyltransferase EXTL2") lands around
+`Score=3.99`.
