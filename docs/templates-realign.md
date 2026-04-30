@@ -1,5 +1,12 @@
 # Templates re-alignment
 
+> **Looking for the wire contract?** Integrators (clients written by
+> your colleagues, downstream tools) want
+> [`templates-realign-spec.md`](./templates-realign-spec.md) — the
+> request/response schema, error matrix, examples, and versioning
+> policy. This file is the operator walkthrough (deployment, rationale,
+> sample run).
+
 Re-align an existing **hmmsearch-style A3M** against a query under
 OTalign / Ankh-Large / glocal. Use this when you already have a
 candidate set of structural templates (typically from an HMM scan

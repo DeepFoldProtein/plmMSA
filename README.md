@@ -72,7 +72,9 @@ each template. Output is an A3M whose rows are exactly `query_len`
 chars from `[A-Z-]` (no lowercase insertions), with `score:N.NNN`
 stamped at the end of the technical-token section of a re-intervalled
 header (between `length:N` and the description tail). Bearer-gated.
-Recipe:
+**API spec for integrators:**
+[`docs/templates-realign-spec.md`](./docs/templates-realign-spec.md).
+Operator walkthrough:
 [`docs/templates-realign.md`](./docs/templates-realign.md).
 
 ### Response format
