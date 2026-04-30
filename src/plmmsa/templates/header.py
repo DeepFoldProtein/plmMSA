@@ -52,15 +52,25 @@ def reinterval_header(header: str, new_start: int, new_end: int) -> str:
 
 def stamp_score(header: str, score: float) -> str:
     """Strip any pre-existing `Score=...` (or `score=...`) token from
-    `header`, then append the new value as ` Score={score:.3f}`.
+    `header`, then insert the new `Score=...` right after the first
+    whitespace-separated header token (typically `>id/start-end`).
 
-    Multiple Score= tokens (rare but possible if a caller stamped
-    twice) all get stripped. The new token always lands at the very
-    end of the header, separated from the prior content by a single
-    space.
+    Layout: `>id/start-end Score=N.NNN <description tail>`. Putting
+    Score= adjacent to the id/range — instead of trailing the
+    description — keeps the alignment metric next to the locus it
+    describes and makes the header diff-friendly (the score moves but
+    the description doesn't shift columns).
+
+    Multiple existing Score= tokens (rare but possible if a caller
+    stamped twice) all get stripped. Headers with no description tail
+    just get `>id/start-end Score=N.NNN`.
     """
     cleaned = _SCORE_TOKEN_RE.sub("", header).rstrip()
-    return f"{cleaned} Score={score:.3f}"
+    score_token = f"Score={score:.3f}"
+    parts = cleaned.split(maxsplit=1)
+    if len(parts) == 1:
+        return f"{parts[0]} {score_token}"
+    return f"{parts[0]} {score_token} {parts[1]}"
 
 
 __all__ = ["reinterval_header", "stamp_score"]

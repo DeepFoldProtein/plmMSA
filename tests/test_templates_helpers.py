@@ -152,39 +152,44 @@ def test_reinterval_no_match_returns_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_appends_when_no_prior_score() -> None:
+def test_stamp_inserts_after_first_token_when_no_prior_score() -> None:
+    """Score= lands right after the `>id/start-end` token, before the
+    description — not at the very end."""
     out = stamp_score(">A/1-3 description", 0.1234)
-    assert out == ">A/1-3 description Score=0.123"
+    assert out == ">A/1-3 Score=0.123 description"
 
 
-def test_stamp_replaces_existing_score() -> None:
+def test_stamp_replaces_existing_score_keeping_new_position() -> None:
+    """Existing Score= (anywhere in the header) gets stripped, then
+    the new Score= is inserted after the first token."""
     out = stamp_score(">A/1-3 desc Score=9.999", 0.42)
-    assert out == ">A/1-3 desc Score=0.420"
+    assert out == ">A/1-3 Score=0.420 desc"
 
 
 def test_stamp_is_case_insensitive_on_existing_token() -> None:
     """Lowercase `score=...` from third-party tooling also gets
     stripped — we own the canonical capitalization (`Score=`)."""
     out = stamp_score(">A/1-3 desc score=1.5 tail", 0.42)
-    assert out == ">A/1-3 desc tail Score=0.420"
+    assert out == ">A/1-3 Score=0.420 desc tail"
 
 
 def test_stamp_strips_multiple_score_tokens() -> None:
     """If a caller stamped twice (rare but possible), all prior
-    Score= tokens are stripped before the new one is appended."""
+    Score= tokens are stripped before the new one is inserted."""
     out = stamp_score(">A/1-3 desc Score=0.1 mid Score=0.2 end", 0.3)
-    assert out == ">A/1-3 desc mid end Score=0.300"
+    assert out == ">A/1-3 Score=0.300 desc mid end"
 
 
 def test_stamp_preserves_domain_name_and_tail() -> None:
     """Worked example from PLAN §6.5: the full-domain header with all
     tail tokens survives a re-interval + score-stamp byte-for-byte
-    except for the surgical edits."""
+    except for the surgical edits. Score= lands between the
+    re-intervalled `/start-end` and the description tail."""
     header = ">7sch_A/55-703 [subseq from] mol:protein length:720  Exostosin-1"
     out = stamp_score(reinterval_header(header, 55, 680), 0.42)
     expected = (
-        ">7sch_A/55-680 [subseq from] mol:protein length:720  "
-        "Exostosin-1 Score=0.420"
+        ">7sch_A/55-680 Score=0.420 "
+        "[subseq from] mol:protein length:720  Exostosin-1"
     )
     assert out == expected
 
@@ -233,5 +238,5 @@ def test_full_realignment_render_and_header() -> None:
     header_in = ">7sch_A/100-400 [subseq from] mol:protein length:720"
     out = stamp_score(reinterval_header(header_in, new_start, new_end), 0.875)
     assert out == (
-        ">7sch_A/105-300 [subseq from] mol:protein length:720 Score=0.875"
+        ">7sch_A/105-300 Score=0.875 [subseq from] mol:protein length:720"
     )
