@@ -63,6 +63,16 @@ Swap `.../plmmsa` for `.../otalign` to use OTalign instead. Paired MSA
 (multimer) support lands with the paired-MSA feature (see
 [`PLAN.md`](./PLAN.md)); single-chain MSAs work now.
 
+### Re-align an existing hmmsearch A3M
+
+If you already have a candidate template set (e.g. an HMM scan against
+PDB) and want PLM-driven column placements rather than HMMER's,
+`POST /v2/templates/realign` runs OTalign / Ankh-Large / glocal over
+each template. Output is an A3M whose rows are exactly `query_len`
+chars from `[A-Z-]` (no lowercase insertions), with `Score=` stamped
+adjacent to a re-intervalled `/start-end`. Bearer-gated. Recipe:
+[`docs/templates-realign.md`](./docs/templates-realign.md).
+
 ### Response format
 
 plmMSA returns A3M by default — the same format ColabFold / AlphaFold

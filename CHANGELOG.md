@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `POST /v2/templates/realign` — re-align an existing hmmsearch-style
+  A3M against the query under OTalign / Ankh-Large / glocal. Output
+  rows are exactly `query_len` chars from `[A-Z-]` (template residues
+  with no matching query column are dropped, no lowercase A3M
+  insertions). Headers preserve the original domain id + tail tokens
+  and gain a re-intervalled `/start-end` plus `Score=N.NNN` adjacent
+  to the range. Bearer-gated like `/v2/embed`. Per-request
+  `sort_by_score` (default false) toggles between input-order and
+  best-hit-first output. Operator walkthrough:
+  [docs/templates-realign.md](./docs/templates-realign.md).
+- `bin/realign_fixture.py` — one-shot operator script that runs the
+  orchestrator end-to-end on the bundled CASP-style Exostosin fixture
+  (593 records) and writes `tmp/exostosin_realigned.a3m` + a stats
+  JSON. ~12 s on one Ada GPU.
 - Upstream PLMAlign Algorithm 1 step 5 score-threshold filter. Default
   threshold `min(0.2·len(Q), 8.0)`. Per-aligner toggle via
   `[aligners.*].filter_enabled`, per-request override via
