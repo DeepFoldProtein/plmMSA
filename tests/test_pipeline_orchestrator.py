@@ -111,7 +111,7 @@ async def test_orchestrator_happy_path_builds_a3m() -> None:
     # explicit `query_id=` request field.
     assert lines[0].startswith(">101")
     assert lines[1] == "MKT"
-    assert lines[2] == ">T1   2.500"
+    assert lines[2] == ">T1 Score=2.500"
     assert lines[3] == "MKTa"
     assert result.stats["hits_fetched"] == 1
     assert result.stats["hits_found"] == 1
@@ -141,7 +141,7 @@ async def test_orchestrator_falls_back_to_query_only_when_no_targets() -> None:
     result = await orchestrator.run({"sequences": ["MKT"]})
 
     assert result.format == "a3m"
-    assert result.payload == ">101   3.000\nMKT\n"
+    assert result.payload == ">101 Score=3.000\nMKT\n"
     assert result.stats["hits_found"] == 1
     assert result.stats["hits_fetched"] == 0
     assert "note" in result.stats

@@ -130,17 +130,28 @@ def _build_fetcher() -> TargetFetcher:
     if seq_redis_url:
         from redis.asyncio import Redis as _Redis
 
-        from plmmsa.pipeline.fetcher import DEFAULT_SEQ_KEY_FORMAT, RedisTargetFetcher
+        from plmmsa.pipeline.fetcher import (
+            DEFAULT_SEQ_KEY_FORMAT,
+            DEFAULT_TAX_KEY_FORMAT,
+            RedisTargetFetcher,
+        )
 
         key_format = os.environ.get("PLMMSA_SEQUENCE_KEY_FORMAT", DEFAULT_SEQ_KEY_FORMAT)
+        # `PLMMSA_TAX_KEY_FORMAT` previously fell through to the default
+        # (`tax:{id}`) even when host `.env` set `tax:UniRef50_{id}` — the
+        # ctor kwarg wasn't wired. Without this, paired-MSA taxonomy joins
+        # and unpaired `TaxID=` headers find nothing.
+        tax_key_format = os.environ.get("PLMMSA_TAX_KEY_FORMAT", DEFAULT_TAX_KEY_FORMAT)
         logger.info(
-            "worker: using Redis sequence cache at %s (key format %r)",
+            "worker: using Redis sequence cache at %s (seq key %r, tax key %r)",
             seq_redis_url,
             key_format,
+            tax_key_format,
         )
         return RedisTargetFetcher(
             _Redis.from_url(seq_redis_url, decode_responses=False),
             key_format=key_format,
+            tax_key_format=tax_key_format,
         )
 
     fasta_path = os.environ.get("PLMMSA_TARGET_FASTA")

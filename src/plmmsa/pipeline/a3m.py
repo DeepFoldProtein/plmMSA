@@ -11,12 +11,17 @@ class AlignmentHit:
     `columns` is the aligner output: list of `(query_idx, target_idx)` pairs
     where `-1` marks a gap on that side. The list is ordered from start to
     end of the alignment.
+
+    `tax_id` is the NCBI taxonomy id (string) when the fetcher resolved one
+    for `target_id`; absent when taxonomy lookup is disabled or the entry
+    isn't in the cache. Used for `TaxID=` in the rendered A3M header.
     """
 
     target_id: str
     score: float
     target_seq: str
     columns: Sequence[tuple[int, int]]
+    tax_id: str | None = None
 
 
 def render_hit(query_len: int, hit: AlignmentHit) -> str:
@@ -54,6 +59,23 @@ def render_hit(query_len: int, hit: AlignmentHit) -> str:
     return "".join(pieces)
 
 
+def _hit_header(target_id: str, score: float, tax_id: str | None) -> str:
+    """Format one A3M FASTA header.
+
+    Layout: `>{target_id} [TaxID={n}] Score={s:.3f}`. The `TaxID=` field
+    matches UniRef50's source-FASTA convention (`>UniRef50_X TaxID=42 …`)
+    so downstream tools that already parse that namespace pick it up
+    unchanged. `TaxID=` is omitted when no taxonomy id is available
+    (taxonomy lookup off, or target not in the cache) — readers that
+    grep for `TaxID=` can therefore key on its presence.
+    """
+    parts = [f">{target_id}"]
+    if tax_id:
+        parts.append(f"TaxID={tax_id}")
+    parts.append(f"Score={score:.3f}")
+    return " ".join(parts)
+
+
 def assemble_a3m(
     *,
     query_id: str,
@@ -67,10 +89,11 @@ def assemble_a3m(
     a same-length uppercase row plus lowercase inserts (see `render_hit`).
     """
     lines: list[str] = []
-    lines.append(f">{query_id}   {query_self_score:.3f}")
+    # Query line: no `TaxID=` (queries are user input, taxonomy unknown).
+    lines.append(f">{query_id} Score={query_self_score:.3f}")
     lines.append(query_seq)
     for hit in hits:
-        lines.append(f">{hit.target_id}   {hit.score:.3f}")
+        lines.append(_hit_header(hit.target_id, hit.score, hit.tax_id))
         lines.append(render_hit(len(query_seq), hit))
     return "\n".join(lines) + "\n"
 
@@ -112,7 +135,7 @@ def assemble_paired_a3m(
         if query_self_score is None
         else float(query_self_score)
     )
-    lines.append(f">{joined_query_id}   {self_score:.3f}")
+    lines.append(f">{joined_query_id} Score={self_score:.3f}")
     lines.append(sep.join(query_seqs))
 
     for tax_id, chain_hits, joint_score in paired_rows:
@@ -123,8 +146,8 @@ def assemble_paired_a3m(
         rendered = sep.join(
             render_hit(len(qs), hit) for qs, hit in zip(query_seqs, chain_hits, strict=True)
         )
-        # Header: taxonomy id + per-chain target ids (|-joined) + joint score.
+        # Header: per-chain target ids (|-joined) + TaxID + joint score.
         chain_labels = "|".join(h.target_id for h in chain_hits)
-        lines.append(f">tax:{tax_id}|{chain_labels}   {joint_score:.3f}")
+        lines.append(f">{chain_labels} TaxID={tax_id} Score={joint_score:.3f}")
         lines.append(rendered)
     return "\n".join(lines) + "\n"

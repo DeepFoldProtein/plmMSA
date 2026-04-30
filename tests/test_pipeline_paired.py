@@ -305,11 +305,14 @@ async def test_run_paired_shared_taxonomy_produces_paired_row() -> None:
     # Query + 2 paired rows (9606 and 10090 both appear in both chains).
     lines = [ln for ln in result.payload.splitlines() if ln.startswith(">")]
     assert lines[0].startswith(">chainA|chainB")
-    tax_headers = [ln for ln in lines[1:] if ln.startswith(">tax:")]
+    # Paired rows now use the field-style header
+    # `>{chain_labels} TaxID={n} Score={s}`; tax id moved out of the
+    # leading id token. Filter on `TaxID=` substring instead.
+    tax_headers = [ln for ln in lines[1:] if "TaxID=" in ln]
     assert len(tax_headers) == 2
     # Joint scores: 9606 → 50+30=80 ranked first; 10090 → 20+10=30 second.
-    assert ">tax:9606|hit0a|hit1a" in tax_headers[0]
-    assert ">tax:10090|hit0b|hit1b" in tax_headers[1]
+    assert tax_headers[0].startswith(">hit0a|hit1a TaxID=9606 Score=")
+    assert tax_headers[1].startswith(">hit0b|hit1b TaxID=10090 Score=")
     # Stats block.
     assert result.stats["topology"] == "paired"
     assert result.stats["paired_rows"] == 2

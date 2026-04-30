@@ -190,7 +190,8 @@ async def test_two_models_union_hits_keeping_best_score() -> None:
 
     # The best T1 score wins (7.0, from esm1b).
     t1_header = next(h for h in headers if h.split()[0] == ">T1")
-    assert float(t1_header.split()[1]) == 7.0
+    score_token = next(t for t in t1_header.split() if t.startswith("Score="))
+    assert float(score_token.removeprefix("Score=")) == 7.0
 
 
 async def test_single_model_legacy_path_still_works() -> None:

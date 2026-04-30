@@ -64,12 +64,31 @@ def test_assemble_a3m_writes_query_first() -> None:
     ]
     a3m = assemble_a3m(query_id="Q", query_seq=query, query_self_score=3.0, hits=hits)
     lines = a3m.rstrip("\n").splitlines()
-    assert lines[0] == ">Q   3.000"
+    assert lines[0] == ">Q Score=3.000"
     assert lines[1] == "MKT"
-    assert lines[2] == ">H1   2.500"
+    # Hit without a tax_id renders without `TaxID=` so downstream readers
+    # can grep for the field's presence.
+    assert lines[2] == ">H1 Score=2.500"
     assert lines[3] == "MKT"
+
+
+def test_assemble_a3m_emits_taxid_when_set() -> None:
+    query = "MKT"
+    hits = [
+        AlignmentHit(
+            target_id="H1",
+            score=2.5,
+            target_seq="MKT",
+            columns=[(0, 0), (1, 1), (2, 2)],
+            tax_id="9606",
+        ),
+    ]
+    a3m = assemble_a3m(query_id="Q", query_seq=query, query_self_score=3.0, hits=hits)
+    # `TaxID=` lands between target_id and Score=, matching UniRef50's
+    # source-FASTA convention so downstream parsers pick it up.
+    assert ">H1 TaxID=9606 Score=2.500" in a3m
 
 
 def test_assemble_a3m_empty_hits_emits_query_only() -> None:
     a3m = assemble_a3m(query_id="Q", query_seq="MKT", query_self_score=3.0, hits=[])
-    assert a3m == ">Q   3.000\nMKT\n"
+    assert a3m == ">Q Score=3.000\nMKT\n"

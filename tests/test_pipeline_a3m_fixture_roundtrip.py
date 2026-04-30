@@ -48,9 +48,23 @@ def _parse_row(row: str) -> tuple[str, list[tuple[int, int]]]:
 
 
 def _parse_header(line: str) -> tuple[str, float]:
+    """Parse one A3M FASTA header in the field-style format.
+
+    `>{target_id} [TaxID={n}] Score={s}` — `target_id` is the first
+    whitespace-delimited token; `Score=` carries the alignment score.
+    Older fixtures with a bare numeric tail (`>id   12.34`) still parse
+    via the rpartition fallback so we don't break legacy snapshots that
+    haven't been re-rendered.
+    """
     assert line.startswith(">"), line
-    name, _, score = line[1:].strip().rpartition(" ")
-    name = name.strip()
+    body = line[1:].strip()
+    parts = body.split()
+    name = parts[0]
+    for tok in parts[1:]:
+        if tok.startswith("Score="):
+            return name, float(tok.removeprefix("Score="))
+    # Legacy fallback: trailing bare number.
+    _, _, score = body.rpartition(" ")
     return name, float(score.strip())
 
 

@@ -327,6 +327,11 @@ class Orchestrator:
         if filter_applied:
             merged_hits = [h for h in merged_hits if h.score >= filter_threshold]
 
+        # Stamp `TaxID=` onto each hit's A3M header from the fetcher's
+        # taxonomy cache (`tax:UniRef50_<acc>` keyspace). Same lookup the
+        # paired path uses; here we just decorate, no filtering.
+        await self._stamp_tax_ids(merged_hits)
+
         a3m = assemble_a3m(
             query_id=query_id,
             query_seq=query_seq,
@@ -507,6 +512,9 @@ class Orchestrator:
                 models=retrieval_models,
                 per_model_stats=result.per_retrieval_stats,
             )
+        # Stamp `TaxID=` headers from the same `tax:*` keyspace the paired
+        # path consults; cross-PLM is the live default for /v2/msa.
+        await self._stamp_tax_ids(result.hits)
         a3m = assemble_a3m(
             query_id=query_id,
             query_seq=query_seq,
@@ -807,7 +815,13 @@ class Orchestrator:
         per_chain_tax: list[dict[str, str]] = []
         for cr in chain_results:
             ids = [h.target_id for h in cr.hits]
-            per_chain_tax.append(await self._fetcher.fetch_taxonomy(ids))
+            tax_map = await self._fetcher.fetch_taxonomy(ids)
+            per_chain_tax.append(tax_map)
+            # Stamp `tax_id` onto each per-chain hit so its A3M header
+            # carries `TaxID=` even if the row doesn't survive the
+            # taxonomy join (paired rows already get the row-level tax).
+            for hit in cr.hits:
+                hit.tax_id = tax_map.get(hit.target_id) or hit.tax_id
 
         # Phase C — MMseqs-style join. Returns paired rows sorted by
         # joint score + bookkeeping counters for the stats block.
@@ -863,6 +877,30 @@ class Orchestrator:
                 "per_chain": per_chain_stats,
             },
         )
+
+    async def _stamp_tax_ids(self, hits: list[AlignmentHit]) -> None:
+        """Decorate each hit with its NCBI taxonomy id from the fetcher.
+
+        Idempotent: hits that already carry a `tax_id` are not overwritten,
+        and missing entries leave `tax_id` as `None` (the renderer drops
+        the `TaxID=` field for those headers). The lookup is one MGET per
+        invocation; cheap relative to the alignment pipeline.
+        """
+        if not hits:
+            return
+        ids = [h.target_id for h in hits if not h.tax_id]
+        if not ids:
+            return
+        try:
+            tax = await self._fetcher.fetch_taxonomy(ids)
+        except Exception:
+            logger.warning(
+                "orchestrator: tax-id fetch failed; A3M emitted without TaxID=", exc_info=True
+            )
+            return
+        for hit in hits:
+            if not hit.tax_id and hit.target_id in tax:
+                hit.tax_id = tax[hit.target_id]
 
     # --- Service calls ----------------------------------------------------
 
