@@ -742,6 +742,15 @@ class TemplatesRealignBody(BaseModel):
         default_factory=dict,
         description="Extra OTalign tunables passed straight through.",
     )
+    sort_by_score: bool = Field(
+        False,
+        description=(
+            "When true, output records are emitted in OTalign-score-"
+            "descending order (best hit first). Default false preserves "
+            "input order — useful for diffing against the original "
+            "hmmsearch a3m row-by-row."
+        ),
+    )
 
 
 class TemplatesRealignResponseBody(BaseModel):
@@ -812,6 +821,7 @@ async def templates_realign(
             model=body.model,
             mode=body.mode,
             options=dict(body.options),
+            sort_by_score=body.sort_by_score,
         )
     )
     return TemplatesRealignResponseBody(

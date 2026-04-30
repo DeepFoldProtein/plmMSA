@@ -121,8 +121,8 @@ def test_request_overrides_pass_through(
     monkeypatch: pytest.MonkeyPatch,
     stub_orchestrator: _StubOrchestrator,
 ) -> None:
-    """Per-request `model` / `mode` / `options` arrive at the
-    orchestrator without modification."""
+    """Per-request `model` / `mode` / `options` / `sort_by_score`
+    arrive at the orchestrator without modification."""
     monkeypatch.setenv("ADMIN_TOKEN", "secret")
     from plmmsa.api import app
 
@@ -137,6 +137,7 @@ def test_request_overrides_pass_through(
                 "model": "ankh_cl",
                 "mode": "q2t",
                 "options": {"eps": 0.05},
+                "sort_by_score": True,
             },
         )
 
@@ -145,6 +146,26 @@ def test_request_overrides_pass_through(
     assert req.model == "ankh_cl"
     assert req.mode == "q2t"
     assert req.options == {"eps": 0.05}
+    assert req.sort_by_score is True
+
+
+def test_sort_by_score_defaults_to_false(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_orchestrator: _StubOrchestrator,
+) -> None:
+    """Default mode preserves input order. Explicit pin so a future
+    change to the default surfaces here."""
+    monkeypatch.setenv("ADMIN_TOKEN", "secret")
+    from plmmsa.api import app
+
+    with TestClient(app) as client:
+        client.post(
+            "/v2/templates/realign",
+            headers={"Authorization": "Bearer secret"},
+            json={"query_sequence": "ABC", "a3m": ">t/1-3\nABC\n"},
+        )
+
+    assert stub_orchestrator.last_request.sort_by_score is False
 
 
 def test_query_too_long_propagates_as_400(

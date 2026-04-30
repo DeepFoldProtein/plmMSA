@@ -54,6 +54,11 @@ class TemplatesRealignRequest:
     model: str | None = None
     mode: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
+    # When True, output records are emitted in OTalign-score-descending
+    # order (best hit first). When False (default), input order is
+    # preserved — useful for clients that key by record position or
+    # want to diff against the original hmmsearch a3m row-by-row.
+    sort_by_score: bool = False
 
 
 @dataclass(slots=True)
@@ -207,7 +212,7 @@ class TemplatesRealignOrchestrator:
         # re-interval header, stamp score. Records where OTalign placed
         # zero template residues are dropped from the output (no row to
         # emit).
-        out_records: list[tuple[Record, str, str]] = []
+        out_records: list[tuple[Record, str, str, float]] = []
         records_dropped_no_match = 0
         for r, aln in zip(records, alignments, strict=True):
             cols = [(int(c[0]), int(c[1])) for c in aln.get("columns") or []]
@@ -223,13 +228,18 @@ class TemplatesRealignOrchestrator:
                 reinterval_header(r.header, new_start, new_end),
                 score,
             )
-            out_records.append((r, new_header, new_row))
+            out_records.append((r, new_header, new_row, score))
+
+        # Optional re-order. Stable sort so equal scores keep their
+        # input-order tiebreak.
+        if request.sort_by_score:
+            out_records.sort(key=lambda t: -t[3])
 
         # Step 9 — assemble. Query record at top (no Score= — the query
         # has no alignment to itself in this pipeline; downstream tools
         # don't expect one).
         lines: list[str] = [f">{request.query_id}", query_seq]
-        for _r, header, row in out_records:
+        for _r, header, row, _score in out_records:
             lines.append(header)
             lines.append(row)
         payload = "\n".join(lines) + "\n"
@@ -245,6 +255,7 @@ class TemplatesRealignOrchestrator:
             "model": model,
             "mode": mode,
             "aligner": aligner,
+            "sort_by_score": request.sort_by_score,
         }
         return TemplatesRealignResult(payload=payload, stats=stats)
 
