@@ -231,7 +231,31 @@ docker compose exec cache-seq redis-cli --scan --pattern 'seq:*' | \
 
 # Drop just the result cache (forces every submit to re-run the pipeline).
 docker compose exec cache-emb redis-cli FLUSHDB
+
+# Drop only the idempotency keys on cache-ops (preserves jobs + tokens
+# + rate counters). Resubmits with identical payloads will create new
+# jobs instead of returning the prior job_id.
+docker compose exec cache-ops sh -lc \
+    'redis-cli --scan --pattern "idem:*" | xargs -r redis-cli DEL'
 ```
+
+**Use both together after a wire-format-changing rollout.** When a
+deploy changes the canonical submit shape, the score scale, or the
+emitted A3M format, the result cache holds entries that are no longer
+on the new contract — and the idempotency keys (10-min TTL) point
+resubmits at the old jobs. Run both clears after `docker compose up
+-d --build` so fresh submissions re-enter the queue cleanly:
+
+```bash
+docker exec plmmsa-cache-emb-1 redis-cli FLUSHDB
+docker exec plmmsa-cache-ops-1 sh -lc \
+    'redis-cli --scan --pattern "idem:*" | xargs -r redis-cli DEL'
+```
+
+(The `docker exec` form vs. `docker compose exec` works the same;
+the former is what shows up in shell history when troubleshooting on
+the host without `cd`-ing into the project. Both reach the same
+container.)
 
 Per-instance wipe (fast restart when AOF/RDB growth hurts):
 
