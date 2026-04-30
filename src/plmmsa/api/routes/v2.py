@@ -34,6 +34,12 @@ router = APIRouter(tags=["v2"])
 _job_store: JobStore | None = None
 _result_cache: ResultCache | None = None
 
+# Module-level orchestrator handle. Tests override via
+# `plmmsa.api.routes.v2._templates_orchestrator = <fake>`. The
+# `Any` typing avoids a circular module-level import — the real type
+# is `plmmsa.templates.TemplatesRealignOrchestrator`.
+_templates_orchestrator: Any | None = None
+
 
 async def _get_job_store() -> JobStore:
     """Lazy singleton — production uses CACHE_URL; tests override via
@@ -691,4 +697,125 @@ async def align(req: AlignRequest, request: Request) -> JSONResponse:
         req.model_dump(),
         service="align",
         request=request,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /v2/templates/realign — re-align an existing hmmsearch a3m
+# ---------------------------------------------------------------------------
+
+
+class TemplatesRealignBody(BaseModel):
+    """Request body for `/v2/templates/realign`. See
+    `PLAN_TEMPLATES_REALIGN.md` §3 for the contract.
+    """
+
+    query_id: str = Field(
+        "query",
+        min_length=1,
+        max_length=128,
+        description="A3M label for the query record at the top of the output.",
+    )
+    query_sequence: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Query residues. Normalized server-side: uppercase, "
+            "whitespace-stripped, gap-stripped. Must match the "
+            "match-state count of every record in `a3m`."
+        ),
+    )
+    a3m: str = Field(
+        ...,
+        min_length=1,
+        description="hmmsearch-style A3M body (one or more records).",
+    )
+    model: str | None = Field(
+        None,
+        description="PLM backend id; default `ankh_large`.",
+    )
+    mode: str | None = Field(
+        None,
+        description="OTalign DP mode; default `glocal`.",
+    )
+    options: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra OTalign tunables passed straight through.",
+    )
+
+
+class TemplatesRealignResponseBody(BaseModel):
+    format: str
+    payload: str
+    stats: dict[str, Any]
+
+
+def _build_templates_orchestrator() -> Any:
+    """Construct the production orchestrator from env vars.
+
+    Lives in its own function so tests can monkeypatch it (or just
+    override `_templates_orchestrator` directly to skip building).
+    """
+    from plmmsa.templates import (
+        HttpTransport,
+        TemplatesRealignConfig,
+        TemplatesRealignOrchestrator,
+    )
+
+    embedding_url = os.environ.get("EMBEDDING_URL", "http://embedding:8081")
+    align_url = os.environ.get("ALIGN_URL", "http://align:8083")
+    timeout_s = float(os.environ.get("PLMMSA_TEMPLATES_TIMEOUT_S", "900"))
+
+    transport = HttpTransport(
+        embedding_url=embedding_url,
+        align_url=align_url,
+        timeout_s=timeout_s,
+    )
+    return TemplatesRealignOrchestrator(
+        config=TemplatesRealignConfig(),
+        transport=transport,
+    )
+
+
+def _get_templates_orchestrator() -> Any:
+    global _templates_orchestrator
+    if _templates_orchestrator is None:
+        _templates_orchestrator = _build_templates_orchestrator()
+    return _templates_orchestrator
+
+
+@router.post(
+    "/templates/realign",
+    response_model=TemplatesRealignResponseBody,
+    dependencies=[Depends(require_admin_token)],
+)
+async def templates_realign(
+    body: TemplatesRealignBody,
+    request: Request,
+) -> TemplatesRealignResponseBody:
+    """Re-align an existing hmmsearch-style A3M against the query under
+    OTalign / Ankh-Large / glocal.
+
+    Sync endpoint — runs the orchestrator inline and returns the result
+    JSON. Async/job lifecycle (PLAN §3 submit-then-poll) lands in a
+    follow-up; for now, callers with very large inputs should expect
+    the request to take minutes.
+    """
+    from plmmsa.templates import TemplatesRealignRequest
+
+    orch = _get_templates_orchestrator()
+    result = await orch.run(
+        TemplatesRealignRequest(
+            query_id=body.query_id,
+            query_sequence=body.query_sequence,
+            a3m=body.a3m,
+            model=body.model,
+            mode=body.mode,
+            options=dict(body.options),
+        )
+    )
+    return TemplatesRealignResponseBody(
+        format=result.format,
+        payload=result.payload,
+        stats=result.stats,
     )
