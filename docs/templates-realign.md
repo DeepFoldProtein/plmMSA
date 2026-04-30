@@ -47,7 +47,7 @@ Content-Type: application/json
 200 OK
 {
   "format": "a3m",
-  "payload": ">7sch_A/55-680 Score=0.875 [subseq from] mol:protein length:720  Exostosin-1\nSPRQ...\n>...",
+  "payload": ">7sch_A/55-680 [subseq from] mol:protein length:720 score:0.875  Exostosin-1\nSPRQ...\n>...",
   "stats": {
     "pipeline": "templates_realign",
     "query_length": 649,
@@ -75,10 +75,11 @@ The output A3M follows three invariants downstream tools can rely on:
   residues that OTalign couldn't place at a query column are dropped
   (PLAN §2). Use [`POST /v2/msa`](submitting-msa.md) instead if you
   need lowercase-insert preservation.
-- **Every header carries `Score=...`** in the canonical `{:.3f}`
-  format adjacent to a re-intervalled `/start-end`. The domain id and
-  every other tail token (`mol:protein`, `length:N`, free-text
-  description) survive byte-for-byte.
+- **Every header carries `score:N.NNN`** in the canonical `{:.3f}`
+  format. The token is slotted at the end of the technical-token
+  section (after `length:N` etc.), right before the double-space
+  separator that prefixes the free-text description. The domain id
+  and every other tail token survive byte-for-byte.
 
 ## Errors
 
@@ -191,4 +192,4 @@ the 10% floor §6.6 enforces). Records that share residues with the
 query get the top score (`6.398` for the five PDB chains identical
 to the query); a typical distant-homolog record (e.g. `1omx_A`,
 "Alpha-1,4-N-acetylhexosaminyltransferase EXTL2") lands around
-`Score=3.99`.
+`score:3.99`.

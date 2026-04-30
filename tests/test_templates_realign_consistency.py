@@ -173,7 +173,7 @@ async def test_full_fixture_runs_end_to_end() -> None:
 
     # Every header: re-intervalled, score-stamped.
     for h in headers:
-        assert "Score=" in h
+        assert "score:" in h
         # First whitespace-separated token must match `>id/start-end`.
         first = h.split(maxsplit=1)[0]
         assert "/" in first

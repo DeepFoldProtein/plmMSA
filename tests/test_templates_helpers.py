@@ -152,44 +152,58 @@ def test_reinterval_no_match_returns_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_inserts_after_first_token_when_no_prior_score() -> None:
-    """Score= lands right after the `>id/start-end` token, before the
-    description — not at the very end."""
+def test_stamp_appends_when_no_double_space_separator() -> None:
+    """Headers without the hmmsearch `  ` (double-space) tokens-vs-
+    description separator just get `score:N.NNN` appended at the end."""
     out = stamp_score(">A/1-3 description", 0.1234)
-    assert out == ">A/1-3 Score=0.123 description"
+    assert out == ">A/1-3 description score:0.123"
 
 
-def test_stamp_replaces_existing_score_keeping_new_position() -> None:
-    """Existing Score= (anywhere in the header) gets stripped, then
-    the new Score= is inserted after the first token."""
+def test_stamp_inserts_before_double_space_description_separator() -> None:
+    """Real hmmsearch shape: `length:N  description`. The score lands
+    next to the technical tokens (after `length:N`, single space),
+    preserving the double-space separator before the description."""
+    header = ">7sch_A/55-703 [subseq from] mol:protein length:720  Exostosin-1"
+    out = stamp_score(header, 6.398)
+    assert out == (
+        ">7sch_A/55-703 [subseq from] mol:protein length:720 "
+        "score:6.398  Exostosin-1"
+    )
+
+
+def test_stamp_replaces_existing_score_token() -> None:
+    """Existing `Score=...` / `score:...` (anywhere) gets stripped,
+    then the new `score:` is slotted at the right position."""
     out = stamp_score(">A/1-3 desc Score=9.999", 0.42)
-    assert out == ">A/1-3 Score=0.420 desc"
+    assert out == ">A/1-3 desc score:0.420"
 
 
-def test_stamp_is_case_insensitive_on_existing_token() -> None:
-    """Lowercase `score=...` from third-party tooling also gets
-    stripped — we own the canonical capitalization (`Score=`)."""
+def test_stamp_is_case_insensitive_and_handles_both_separators() -> None:
+    """Both `score=` and `score:` (and the capitalized variants) are
+    stripped — we own the canonical form (`score:`)."""
     out = stamp_score(">A/1-3 desc score=1.5 tail", 0.42)
-    assert out == ">A/1-3 Score=0.420 desc tail"
+    assert out == ">A/1-3 desc tail score:0.420"
+    out = stamp_score(">A/1-3 desc Score:1.5 tail", 0.42)
+    assert out == ">A/1-3 desc tail score:0.420"
 
 
 def test_stamp_strips_multiple_score_tokens() -> None:
-    """If a caller stamped twice (rare but possible), all prior
-    Score= tokens are stripped before the new one is inserted."""
-    out = stamp_score(">A/1-3 desc Score=0.1 mid Score=0.2 end", 0.3)
-    assert out == ">A/1-3 Score=0.300 desc mid end"
+    """If a caller stamped twice, all prior score tokens get stripped
+    before the new one is inserted."""
+    out = stamp_score(">A/1-3 desc Score=0.1 mid score:0.2 end", 0.3)
+    assert out == ">A/1-3 desc mid end score:0.300"
 
 
 def test_stamp_preserves_domain_name_and_tail() -> None:
-    """Worked example from PLAN §6.5: the full-domain header with all
-    tail tokens survives a re-interval + score-stamp byte-for-byte
-    except for the surgical edits. Score= lands between the
-    re-intervalled `/start-end` and the description tail."""
+    """Worked example: the full-domain header with all tail tokens
+    survives a re-interval + score-stamp byte-for-byte except for the
+    surgical edits. `score:` lands at the end of the technical-tokens
+    section, before the `  Exostosin-1` description gap."""
     header = ">7sch_A/55-703 [subseq from] mol:protein length:720  Exostosin-1"
     out = stamp_score(reinterval_header(header, 55, 680), 0.42)
     expected = (
-        ">7sch_A/55-680 Score=0.420 "
-        "[subseq from] mol:protein length:720  Exostosin-1"
+        ">7sch_A/55-680 [subseq from] mol:protein length:720 "
+        "score:0.420  Exostosin-1"
     )
     assert out == expected
 
@@ -197,9 +211,9 @@ def test_stamp_preserves_domain_name_and_tail() -> None:
 def test_stamp_format_is_fixed_three_decimals() -> None:
     """Score format is `{:.3f}` — pinned so downstream readers have a
     stable parse."""
-    assert stamp_score(">A/1-3", 0.0) == ">A/1-3 Score=0.000"
-    assert stamp_score(">A/1-3", 1.5) == ">A/1-3 Score=1.500"
-    assert stamp_score(">A/1-3", -0.5) == ">A/1-3 Score=-0.500"
+    assert stamp_score(">A/1-3", 0.0) == ">A/1-3 score:0.000"
+    assert stamp_score(">A/1-3", 1.5) == ">A/1-3 score:1.500"
+    assert stamp_score(">A/1-3", -0.5) == ">A/1-3 score:-0.500"
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +251,7 @@ def test_full_realignment_render_and_header() -> None:
     new_end = orig_start + span[1]  # 300
     header_in = ">7sch_A/100-400 [subseq from] mol:protein length:720"
     out = stamp_score(reinterval_header(header_in, new_start, new_end), 0.875)
+    # No double-space description separator → score appended at end.
     assert out == (
-        ">7sch_A/105-300 Score=0.875 [subseq from] mol:protein length:720"
+        ">7sch_A/105-300 [subseq from] mol:protein length:720 score:0.875"
     )

@@ -29,10 +29,10 @@ from typing import Final
 # becomes the interval.
 _HEADER_TOKEN_RE: Final = re.compile(r"\A(>\S+?)/(\d+)-(\d+)(?=\s|\Z)")
 
-# Score= or score= (case-insensitive). Stripped before stamping. Leading
-# whitespace requirement avoids accidentally eating an id that begins
-# with `Score=...` (which would be a malformed header anyway).
-_SCORE_TOKEN_RE: Final = re.compile(r"\s+[Ss]core=\S+")
+# Score=/score=/Score:/score: (case-insensitive, both separators).
+# Stripped before stamping. Leading whitespace requirement avoids
+# accidentally eating an id that begins with `Score=...`.
+_SCORE_TOKEN_RE: Final = re.compile(r"\s+[Ss]core[:=]\S+")
 
 
 def reinterval_header(header: str, new_start: int, new_end: int) -> str:
@@ -51,26 +51,36 @@ def reinterval_header(header: str, new_start: int, new_end: int) -> str:
 
 
 def stamp_score(header: str, score: float) -> str:
-    """Strip any pre-existing `Score=...` (or `score=...`) token from
-    `header`, then insert the new `Score=...` right after the first
-    whitespace-separated header token (typically `>id/start-end`).
+    """Strip any pre-existing `Score=...` / `score=...` / `Score:...` /
+    `score:...` token from `header`, then insert `score:N.NNN` at the
+    end of the technical-tokens section.
 
-    Layout: `>id/start-end Score=N.NNN <description tail>`. Putting
-    Score= adjacent to the id/range — instead of trailing the
-    description — keeps the alignment metric next to the locus it
-    describes and makes the header diff-friendly (the score moves but
-    the description doesn't shift columns).
+    hmmsearch headers follow the convention
+        `>id/start-end <key:value tokens>  <free-text description>`
+    where a **double-space gap** separates technical tokens (like
+    `mol:protein`, `length:720`) from the human-readable description
+    (like `Exostosin-1`). We slot `score:N.NNN` in next to those
+    technical tokens — right before the double-space — so it lives
+    where downstream parsers expect machine-readable fields. Headers
+    without a double-space separator get `score:N.NNN` appended at
+    the end.
 
-    Multiple existing Score= tokens (rare but possible if a caller
-    stamped twice) all get stripped. Headers with no description tail
-    just get `>id/start-end Score=N.NNN`.
+    Multiple existing score tokens (rare but possible if a caller
+    stamped twice) are all stripped before the new one is inserted.
     """
     cleaned = _SCORE_TOKEN_RE.sub("", header).rstrip()
-    score_token = f"Score={score:.3f}"
-    parts = cleaned.split(maxsplit=1)
-    if len(parts) == 1:
-        return f"{parts[0]} {score_token}"
-    return f"{parts[0]} {score_token} {parts[1]}"
+    score_token = f"score:{score:.3f}"
+
+    # Collapse any double-double-spaces that the score-strip may have
+    # left behind (e.g. `... length:720  score:0.5  Exostosin-1` →
+    # stripping middle leaves `... length:720   Exostosin-1`).
+    while "   " in cleaned:
+        cleaned = cleaned.replace("   ", "  ")
+
+    sep_idx = cleaned.find("  ")
+    if sep_idx >= 0:
+        return f"{cleaned[:sep_idx]} {score_token}{cleaned[sep_idx:]}"
+    return f"{cleaned} {score_token}"
 
 
 __all__ = ["reinterval_header", "stamp_score"]

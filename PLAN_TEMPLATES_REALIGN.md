@@ -174,10 +174,17 @@ The legacy hmmsearch dump has no separate query header, so we expect
           `>{query_id}\n{query_seq}` themselves.
         • Header preserved verbatim except for two surgical edits:
               (1) `/start-end` → `/new_start-new_end` (re-intervalled).
-              (2) `Score=N.NNN` inserted right after the `/start-end`
-                  token, before the description tail. Any prior
-                  `Score=` / `score=` tokens anywhere in the header are
-                  stripped first.
+              (2) `score:N.NNN` slotted at the end of the
+                  technical-tokens section. hmmsearch headers follow
+                  the convention
+                      `>id/start-end <key:value tokens>  <description>`
+                  with a double-space separating tokens from the
+                  free-text tail. We insert `score:` right before that
+                  double-space (so it sits next to `length:N` and the
+                  other technical tokens). Headers with no
+                  double-space separator just get `score:` appended
+                  at the end. Any prior `Score=` / `score:` tokens
+                  anywhere in the header are stripped first.
           Everything else stays — the **domain name / id** (`7sch_A`),
           the `[subseq from]` annotation, `mol:protein`, the `length:N`
           token (full-protein length from the PDB header), the
@@ -434,12 +441,13 @@ contract) and §6.6 (real end-to-end):
 - **Domain-name + tail preserved** — header
   `>7sch_A/55-703 [subseq from] mol:protein length:720  Exostosin-1`
   re-intervalled to `/55-680` and stamped with score 0.42 must come out as
-  `>7sch_A/55-680 [subseq from] mol:protein length:720  Exostosin-1 Score=0.420`.
+  `>7sch_A/55-680 [subseq from] mol:protein length:720 score:0.420  Exostosin-1`.
   `7sch_A`, `[subseq from]`, `mol:protein`, `length:720`, and `Exostosin-1`
   are all byte-identical. Whitespace between tail tokens preserved.
-- **`Score=` stamping** — header without any score gets `Score=…` appended;
-  header that already carries `Score=…` (or `score=…`) has it stripped and
-  replaced (§7.2 proposed behavior). Domain name + tail still preserved.
+- **`score:` stamping** — header without any score gets `score:N.NNN`
+  inserted at the end of the technical-tokens section (before the
+  double-space description separator); a header that already carries
+  `Score=…` / `score:…` has it stripped first.
 - **Row gap-padding to `query_len`** — synthetic OTalign output that covers
   only `q ∈ [10, 50)` of a 100-residue query produces a rendered row whose
   first 10 slots and last 50 slots are `-`, with `upper+gap == 100`. No

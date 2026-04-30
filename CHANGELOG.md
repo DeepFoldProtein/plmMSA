@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows are exactly `query_len` chars from `[A-Z-]` (template residues
   with no matching query column are dropped, no lowercase A3M
   insertions). Headers preserve the original domain id + tail tokens
-  and gain a re-intervalled `/start-end` plus `Score=N.NNN` adjacent
-  to the range. Bearer-gated like `/v2/embed`. Per-request
+  and gain a re-intervalled `/start-end` plus a `score:N.NNN` token
+  at the end of the technical-tokens section, before the description. Bearer-gated like `/v2/embed`. Per-request
   `sort_by_score` (default false) toggles between input-order and
   best-hit-first output. Operator walkthrough:
   [docs/templates-realign.md](./docs/templates-realign.md).

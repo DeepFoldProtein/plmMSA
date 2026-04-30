@@ -24,7 +24,7 @@ class _StubOrchestrator:
     """
 
     last_request: Any = None
-    result_payload: str = ">Q\nABC\n>t/1-3 Score=0.500\nABC\n"
+    result_payload: str = ">Q\nABC\n>t/1-3 score:0.500\nABC\n"
     result_stats: dict[str, Any] = None  # type: ignore[assignment]
     raise_with: Exception | None = None
 
@@ -105,7 +105,7 @@ def test_happy_path_returns_payload_and_stats(
     assert resp.status_code == 200
     body = resp.json()
     assert body["format"] == "a3m"
-    assert body["payload"] == ">Q\nABC\n>t/1-3 Score=0.500\nABC\n"
+    assert body["payload"] == ">Q\nABC\n>t/1-3 score:0.500\nABC\n"
     assert body["stats"]["records_kept"] == 1
     assert body["stats"]["mode"] == "glocal"
 

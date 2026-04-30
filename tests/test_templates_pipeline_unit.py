@@ -463,7 +463,7 @@ async def test_one_residue_query_and_template() -> None:
     )
     assert result.stats["records_kept"] == 1
     body = result.payload.splitlines()
-    assert body == [">t/1-1 Score=0.500", "M"]
+    assert body == [">t/1-1 score:0.500", "M"]
 
 
 # ---------------------------------------------------------------------------
@@ -569,9 +569,9 @@ async def test_default_preserves_input_order() -> None:
     )
     headers = [ln for ln in result.payload.splitlines() if ln.startswith(">")]
     assert headers == [
-        ">first/1-1 Score=0.300",
-        ">second/1-1 Score=0.200",
-        ">third/1-1 Score=0.100",
+        ">first/1-1 score:0.300",
+        ">second/1-1 score:0.200",
+        ">third/1-1 score:0.100",
     ]
     assert result.stats["sort_by_score"] is False
 
@@ -608,9 +608,9 @@ async def test_sort_by_score_emits_best_hit_first() -> None:
     # (first=0.3, second=0.2, third=0.1) so a sort is a no-op. The
     # dedicated reorder test below pins a non-trivial reorder.
     assert headers == [
-        ">first/1-1 Score=0.300",
-        ">second/1-1 Score=0.200",
-        ">third/1-1 Score=0.100",
+        ">first/1-1 score:0.300",
+        ">second/1-1 score:0.200",
+        ">third/1-1 score:0.100",
     ]
     assert result.stats["sort_by_score"] is True
 
@@ -646,9 +646,9 @@ async def test_sort_by_score_actually_reorders() -> None:
     )
     headers = [ln for ln in result.payload.splitlines() if ln.startswith(">")]
     assert headers == [
-        ">b/1-1 Score=0.900",
-        ">c/1-1 Score=0.500",
-        ">a/1-1 Score=0.100",
+        ">b/1-1 score:0.900",
+        ">c/1-1 score:0.500",
+        ">a/1-1 score:0.100",
     ]
 
 
@@ -687,4 +687,4 @@ async def test_header_reintervals_with_target_span() -> None:
     header = result.payload.splitlines()[0]
     # span = (1, 3) → new_start = 100+1 = 101; new_end = 100+3 = 103.
     assert header.startswith(">t/101-103 ")
-    assert "Score=0.750" in header
+    assert "score:0.750" in header

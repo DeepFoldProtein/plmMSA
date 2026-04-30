@@ -69,8 +69,10 @@ If you already have a candidate template set (e.g. an HMM scan against
 PDB) and want PLM-driven column placements rather than HMMER's,
 `POST /v2/templates/realign` runs OTalign / Ankh-Large / glocal over
 each template. Output is an A3M whose rows are exactly `query_len`
-chars from `[A-Z-]` (no lowercase insertions), with `Score=` stamped
-adjacent to a re-intervalled `/start-end`. Bearer-gated. Recipe:
+chars from `[A-Z-]` (no lowercase insertions), with `score:N.NNN`
+stamped at the end of the technical-token section of a re-intervalled
+header (between `length:N` and the description tail). Bearer-gated.
+Recipe:
 [`docs/templates-realign.md`](./docs/templates-realign.md).
 
 ### Response format
