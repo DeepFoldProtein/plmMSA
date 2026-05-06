@@ -102,6 +102,41 @@ console.log("plmMSA UI: app.js loaded");
   let renderedMsaJobId = null;
   let renderedMsaPayload = null;
 
+  // The MSA viewer is the pure-DOM module from
+  // vv137/vscode-bioinformatics (vendored in viewer.module.js). One
+  // instance is created lazily on first render and reused for the
+  // lifetime of the page; load() blows away the container's children
+  // so we never re-create it.
+  const MSA_STORAGE_KEY = "plmmsa.msa-viewer.state";
+  // Upstream's FONT_DEFAULT is 10 px, which makes match columns wider
+  // than typical plmMSA queries need. Pre-seed the storage so first-
+  // time users land on a tighter grid; existing users who already
+  // dialed in their own zoom keep their preference.
+  (function seedDefaultZoom() {
+    try {
+      if (window.localStorage.getItem(MSA_STORAGE_KEY) == null) {
+        window.localStorage.setItem(
+          MSA_STORAGE_KEY,
+          JSON.stringify({ fontPx: 8 })
+        );
+      }
+    } catch { /* localStorage disabled — viewer falls back to upstream defaults */ }
+  })();
+
+  let msaViewer = null;
+  function getMsaViewer() {
+    if (msaViewer) return msaViewer;
+    if (typeof window.MsaViewer === "undefined") return null;
+    const container = document.getElementById("msa-viewer-container");
+    if (!container) return null;
+    msaViewer = window.MsaViewer.create({
+      container,
+      storage: window.localStorage,
+      storageKey: MSA_STORAGE_KEY,
+    });
+    return msaViewer;
+  }
+
   /* --- URL query-param state --- */
 
   function readURL() {
@@ -359,16 +394,15 @@ console.log("plmMSA UI: app.js loaded");
       const preview = a3m.split("\n").slice(0, 80).join("\n");
 
       if (a3m) {
-        const container = document.getElementById("msa-viewer-container");
         if (renderedMsaJobId !== currentJobId || renderedMsaPayload !== a3m) {
-          const seqs = parseA3mForViewer(a3m);
-          renderMsaViewer(container, seqs);
+          const inst = getMsaViewer();
+          if (inst) inst.load(parseA3mToViewerMsa(a3m));
           renderedMsaJobId = currentJobId;
           renderedMsaPayload = a3m;
         }
       } else {
-        const container = document.getElementById("msa-viewer-container");
-        if (container) container.innerHTML = "";
+        const inst = getMsaViewer();
+        if (inst) inst.load({ format: "a3m", matchLen: 0, entries: [] });
         renderedMsaJobId = currentJobId;
         renderedMsaPayload = "";
       }
@@ -386,187 +420,68 @@ console.log("plmMSA UI: app.js loaded");
     }
   }
 
-  function parseA3mForViewer(text) {
-    const seqs = [];
-    let current = null;
+  /**
+   * Parse an A3M string into the `ViewerMsa` shape consumed by
+   * `window.MsaViewer.create(...).load(...)`. Mirrors the projection
+   * that the upstream extension does in `src/parsers/{fasta,project}.ts`:
+   * uppercase residues + `-` are match columns, lowercase + `.` are
+   * inserts keyed by the next match-column index. The first record in
+   * the file is the query.
+   */
+  function parseA3mToViewerMsa(text) {
+    const entries = [];
+    let pendingHeader = null;
+    let pendingSeq = "";
+
+    function flush() {
+      if (pendingHeader === null) return;
+      const name = pendingHeader.trim() || `seq_${entries.length + 1}`;
+      const id = name.split(/\s+/)[0] || `seq_${entries.length + 1}`;
+      let matchSeq = "";
+      const inserts = {};
+      let pendingInsert = "";
+      for (const ch of pendingSeq) {
+        const isInsert = ch === "." || (ch >= "a" && ch <= "z");
+        if (isInsert) {
+          if (ch !== ".") pendingInsert += ch;
+          continue;
+        }
+        if (pendingInsert) {
+          inserts[matchSeq.length] = pendingInsert;
+          pendingInsert = "";
+        }
+        matchSeq += ch;
+      }
+      if (pendingInsert) inserts[matchSeq.length] = pendingInsert;
+      entries.push({
+        id,
+        name,
+        matchSeq,
+        inserts,
+        isQuery: entries.length === 0,
+        kind: id.startsWith("ss_") ? "ss" : id.startsWith("sa_") ? "sa" : "seq",
+      });
+    }
+
     for (const rawLine of String(text).split(/\r?\n/)) {
-      const line = rawLine.trim();
+      const line = rawLine.replace(/\s+$/, "");
       if (!line) continue;
+      if (line.startsWith("#")) continue;
       if (line.startsWith(">")) {
-        const label = line.slice(1).trim() || `seq_${seqs.length + 1}`;
-        current = {
-          id: label.split(/\s+/)[0] || `seq_${seqs.length + 1}`,
-          name: label,
-          seq: "",
-        };
-        seqs.push(current);
-      } else if (current) {
-        current.seq += line.replace(/[a-z.]/g, "");
+        flush();
+        pendingHeader = line.slice(1);
+        pendingSeq = "";
+      } else if (pendingHeader !== null) {
+        pendingSeq += line.replace(/\s+/g, "");
       }
     }
-    return seqs;
-  }
+    flush();
 
-  function renderMsaViewer(container, seqs) {
-    container.innerHTML = "";
-    if (seqs.length === 0) return;
-
-    const pageSize = 199;
-    let page = 0;
-    const query = seqs[0];
-    const hits = seqs.slice(1);
-    const pageCount = Math.max(1, Math.ceil(hits.length / pageSize));
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "static-msa-viewer";
-    const controls = document.createElement("div");
-    controls.className = "static-msa-controls";
-    const prevBtn = document.createElement("button");
-    prevBtn.type = "button";
-    prevBtn.className = "msa-page-btn";
-    prevBtn.textContent = "<";
-    const pageLabel = document.createElement("span");
-    pageLabel.className = "msa-page-label";
-    const nextBtn = document.createElement("button");
-    nextBtn.type = "button";
-    nextBtn.className = "msa-page-btn";
-    nextBtn.textContent = ">";
-    const fullBtn = document.createElement("button");
-    fullBtn.type = "button";
-    fullBtn.className = "msa-fullscreen-btn";
-    fullBtn.title = "Full screen";
-    fullBtn.setAttribute("aria-label", "Full screen");
-    setFullscreenButtonIcon(fullBtn, false);
-    controls.appendChild(prevBtn);
-    controls.appendChild(pageLabel);
-    controls.appendChild(nextBtn);
-    controls.appendChild(fullBtn);
-
-    const table = document.createElement("div");
-    table.className = "static-msa-table";
-    wrapper.appendChild(controls);
-    wrapper.appendChild(table);
-    container.appendChild(wrapper);
-
-    function drawPage() {
-      table.innerHTML = "";
-      renderMsaRow(table, query, "static-msa-query");
-      const start = page * pageSize;
-      const rows = hits.slice(start, start + pageSize);
-      for (const seq of rows) renderMsaRow(table, seq);
-
-      prevBtn.disabled = page === 0;
-      nextBtn.disabled = page >= pageCount - 1;
-      const firstHit = hits.length === 0 ? 0 : start + 1;
-      const lastHit = Math.min(start + rows.length, hits.length);
-      pageLabel.textContent =
-        hits.length === 0
-          ? "query only"
-          : `${firstHit}-${lastHit} of ${hits.length}`;
+    let matchLen = 0;
+    for (const e of entries) {
+      if (e.matchSeq.length > matchLen) matchLen = e.matchSeq.length;
     }
-
-    prevBtn.addEventListener("click", () => {
-      if (page > 0) {
-        page--;
-        drawPage();
-      }
-    });
-    nextBtn.addEventListener("click", () => {
-      if (page < pageCount - 1) {
-        page++;
-        drawPage();
-      }
-    });
-    fullBtn.addEventListener("click", () => toggleMsaFullscreen(wrapper));
-    document.addEventListener("fullscreenchange", () => {
-      const isFullScreen = document.fullscreenElement === wrapper;
-      fullBtn.title = isFullScreen ? "Exit full screen" : "Full screen";
-      fullBtn.setAttribute("aria-label", fullBtn.title);
-      setFullscreenButtonIcon(fullBtn, isFullScreen);
-    });
-
-    drawPage();
-  }
-
-  async function toggleMsaFullscreen(wrapper) {
-    if (document.fullscreenElement === wrapper) {
-      await document.exitFullscreen();
-    } else if (wrapper.requestFullscreen) {
-      await wrapper.requestFullscreen();
-    }
-  }
-
-  function setFullscreenButtonIcon(button, isFullScreen) {
-    button.innerHTML = isFullScreen
-      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 5V3h2M11 3h2v2M13 11v2h-2M5 13H3v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'
-      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3H3v3M10 3h3v3M13 10v3h-3M3 10v3h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-  }
-
-  function renderMsaRow(parent, seq, extraClass = "") {
-    const row = document.createElement("div");
-    row.className = "static-msa-row";
-    if (extraClass) row.classList.add(extraClass);
-
-    const label = document.createElement("span");
-    label.className = "static-msa-label";
-    label.textContent = seq.name || seq.id || "";
-    label.title = label.textContent;
-
-    const body = document.createElement("span");
-    body.className = "static-msa-seq";
-    renderColoredSequence(body, seq.seq || "");
-
-    row.appendChild(label);
-    row.appendChild(body);
-    parent.appendChild(row);
-  }
-
-  function renderColoredSequence(container, seq) {
-    const fragment = document.createDocumentFragment();
-    for (const residue of seq) {
-      const cell = document.createElement("span");
-      cell.className = `msa-residue msa-aa-${residueClass(residue)}`;
-      cell.textContent = residue;
-      fragment.appendChild(cell);
-    }
-    container.appendChild(fragment);
-  }
-
-  function residueClass(residue) {
-    switch (String(residue).toUpperCase()) {
-      case "A":
-      case "I":
-      case "L":
-      case "M":
-      case "F":
-      case "W":
-      case "V":
-        return "hydrophobic";
-      case "D":
-      case "E":
-        return "acidic";
-      case "K":
-      case "R":
-        return "basic";
-      case "H":
-      case "Y":
-        return "aromatic";
-      case "S":
-      case "T":
-      case "N":
-      case "Q":
-        return "polar";
-      case "C":
-        return "cysteine";
-      case "G":
-        return "glycine";
-      case "P":
-        return "proline";
-      case "-":
-        return "gap";
-      default:
-        return "other";
-    }
+    return { format: "a3m", matchLen, entries };
   }
 
   function escapeHtml(s) {

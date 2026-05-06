@@ -184,184 +184,87 @@ pre {
   margin: 0;
 }
 
-.static-msa-viewer {
-  max-height: 24rem;
-  overflow: hidden;
+/* MSA viewer host. The vendored viewer.module.js fills this container
+ * with its own DOM (controls bar, sticky header stack, virtualized
+ * grid). We constrain its outer box; the viewer manages its own
+ * scrolling inside. */
+#msa-viewer-container {
+  height: 70vh;
+  min-height: 32rem;
+  /* Override viewer.css defaults (padding, full viewport height) — those
+   * are sized for the VS Code webview where the viewer owns the page. */
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: #fff;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
+  overflow: hidden;
 }
 
-.static-msa-viewer:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  max-height: none;
-  border: 0;
-  border-radius: 0;
-}
+/* "first = query" toggle — meaningless here because plmMSA always emits
+ * the query as row 0 of the A3M. Hide the only checkbox-toggle the
+ * upstream viewer renders (we re-grep on every viewer.module.js sync
+ * to make sure no other control reuses this class). */
+.msa-checkbox-toggle { display: none !important; }
 
-.static-msa-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  background: #f7f7f4;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-}
+/* Color-palette select would otherwise size to its widest option text.
+ * Cap it so the controls bar doesn't reserve a fat slot for it. */
+.msa-palette-sel { width: 6.5rem; }
 
-.static-msa-table {
-  max-height: 21.3rem;
-  overflow: auto;
-}
+/* Goto-column input — removed. Same `.msa-goto` class is also used by
+ * the templates-view "wrap" input (placeholder="auto"); attribute-
+ * select on placeholder so we only drop the col-jump field. The Cmd/
+ * Ctrl+L keyboard shortcut becomes a no-op as a side effect — we
+ * accept that since the field is gone too. */
+.msa-goto[placeholder="col"] { display: none !important; }
 
-.static-msa-viewer:fullscreen .static-msa-table {
-  max-height: calc(100vh - 2.75rem);
-}
-
-.msa-page-btn {
-  min-width: 2rem;
-  padding: 0.2rem 0.45rem;
-  color: var(--fg);
-  background: #fff;
-  border-color: var(--border);
-}
-
+/* Pin the fullscreen button to the right edge of the controls bar.
+ * Upstream uses `margin-left: auto` to push it right, but the bar
+ * has `overflow-x: auto`, so on narrow viewports (or when stats
+ * pills + palette + zoom add up) the button scrolls off-screen.
+ * Sticky keeps it in view regardless of horizontal scroll position. */
 .msa-fullscreen-btn {
-  margin-left: auto;
-  width: 2rem;
-  height: 2rem;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--fg);
-  background: #fff;
-  border-color: var(--border);
-  line-height: 1;
-  text-align: center;
-}
-
-.msa-fullscreen-btn svg {
-  width: 1rem;
-  height: 1rem;
-}
-
-.msa-page-btn:disabled {
-  color: #aaa;
-  background: #f5f3ed;
-}
-
-.msa-page-label {
-  min-width: 8.5rem;
-  color: var(--fg-muted);
-  font-size: 0.82rem;
-  text-align: center;
-}
-
-.static-msa-row {
-  display: grid;
-  grid-template-columns: 12rem 1fr;
-  min-width: max-content;
-  border-bottom: 1px solid #eee;
-}
-
-.static-msa-query {
   position: sticky;
-  top: 0;
-  z-index: 3;
-  border-bottom-color: var(--accent);
-  box-shadow: 0 1px 0 var(--accent);
+  right: 0;
+  /* Match the controls-bar background so the button sits cleanly on
+   * top of any siblings that pass underneath while the bar scrolls. */
+  background: var(--vscode-editorWidget-background, var(--bio-panel)) !important;
+  z-index: 2;
 }
 
+/* Query row needs a visible tint. The upstream resolves this through
+ * `--vscode-editor-selectionBackground`, which is too faint outside a
+ * VS Code editor. Pin the tint to plmMSA's pale-blue so the query
+ * row stands out against the white grid. */
 .static-msa-query .static-msa-label,
 .static-msa-query .static-msa-seq {
   background: #eef7fb;
 }
 
-.static-msa-label {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  overflow: hidden;
-  padding: 0.12rem 0.5rem;
-  border-right: 1px solid var(--border);
-  background: #f7f7f4;
-  color: var(--fg-muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Re-enable page scrolling. viewer.css pins html/body to the viewport
+ * and hides overflow because in VS Code the viewer is the only thing
+ * on screen — that's wrong for our embedded use. */
+html, body {
+  height: auto;
+  overflow: visible;
 }
 
-.static-msa-seq {
-  padding: 0.12rem 0.5rem;
-  white-space: pre;
-}
-
-.msa-residue {
-  display: inline-block;
-  width: 1ch;
-  text-align: center;
-}
-
-.msa-aa-acidic {
-  background: #e43d30;
-  color: #fff;
-}
-
-.msa-aa-basic {
-  background: #1f66d1;
-  color: #fff;
-}
-
-.msa-aa-polar {
-  background: #2da44e;
-  color: #fff;
-}
-
-.msa-aa-hydrophobic {
-  background: #f2d13d;
-  color: #222;
-}
-
-.msa-aa-aromatic {
-  background: #18a3a8;
-  color: #fff;
-}
-
-.msa-aa-cysteine {
-  background: #d29b00;
-  color: #222;
-}
-
-.msa-aa-glycine {
-  background: #e6e6e6;
-  color: #222;
-}
-
-.msa-aa-proline {
-  background: #c47bd6;
-  color: #fff;
-}
-
-.msa-aa-gap {
-  background: transparent;
-  color: #aaa;
-}
-
-.msa-aa-other {
-  background: #ecebe2;
-  color: var(--fg-muted);
-}
-
-.static-msa-note {
-  position: sticky;
-  left: 0;
-  padding: 0.35rem 0.5rem;
-  background: #f7f7f4;
-  color: var(--fg-muted);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+/* Map the viewer's `--vscode-*` token names onto our palette. The
+ * vendored viewer.css references `var(--vscode-foreground)` etc.,
+ * which are unset outside a VS Code webview; without these shims the
+ * viewer renders unstyled. */
+:root {
+  --vscode-foreground: var(--fg);
+  --vscode-descriptionForeground: var(--fg-muted);
+  --vscode-editor-background: #fff;
+  --vscode-editorWidget-background: #f7f7f4;
+  --vscode-panel-border: var(--border);
+  --vscode-editorWidget-border: var(--border);
+  --vscode-focusBorder: var(--accent);
+  --vscode-editor-font-family: var(--font-mono);
+  --vscode-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vscode-font-size: 13px;
+  --vscode-errorForeground: var(--error);
+  --vscode-editor-selectionBackground: rgba(42, 111, 151, 0.12);
 }
 
 details { margin-bottom: 0.75rem; }

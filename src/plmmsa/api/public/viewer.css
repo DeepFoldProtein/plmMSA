@@ -1,0 +1,1073 @@
+/* Ported from plmMSA styles.css (static-msa-* + msa-aa-*).
+ * Adapted to use VS Code theme variables so the viewer respects the
+ * active color theme. */
+
+:root {
+  --bio-fg: var(--vscode-foreground);
+  --bio-fg-muted: var(--vscode-descriptionForeground);
+  --bio-bg: var(--vscode-editor-background);
+  --bio-panel: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --bio-border: var(--vscode-panel-border, var(--vscode-editorWidget-border, #444));
+  --bio-accent: var(--vscode-focusBorder, #007acc);
+  --bio-mono: var(--vscode-editor-font-family);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bio-bg);
+  color: var(--bio-fg);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  /* Pin the document to the viewport — the viewer owns its own scroll
+   * regions, so the page itself should never scroll. Without this a
+   * 1-2 px rounding overflow produces a near-full-track outer scrollbar. */
+  height: 100vh;
+  overflow: hidden;
+}
+
+#msa-viewer-container {
+  padding: 0.5rem;
+  box-sizing: border-box;
+  height: 100vh;
+}
+
+.msa-error {
+  padding: 0.75rem 1rem;
+  color: var(--vscode-errorForeground);
+  font-family: var(--bio-mono);
+  white-space: pre-wrap;
+}
+
+/* Drag-and-drop overlay. Shown while the user is dragging files over
+ * the viewer container. The pseudo-element catches no pointer events
+ * so it doesn't break drop handling underneath. */
+#msa-viewer-container,
+.msa-viewer-host {
+  position: relative;
+}
+
+.msa-drag-over::after {
+  content: "Drop alignment file";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--vscode-editor-selectionBackground, rgba(31, 102, 209, 0.12));
+  border: 2px dashed var(--bio-accent);
+  border-radius: 4px;
+  color: var(--bio-fg);
+  font-family: var(--vscode-font-family);
+  font-size: 1.05rem;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.static-msa-viewer {
+  position: relative;
+  border: 1px solid var(--bio-border);
+  border-radius: 4px;
+  background: var(--bio-panel);
+  font-family: var(--bio-mono);
+  /* Wrapper uses VS Code UI font-size so the controls bar stays at
+   * constant size. Zoom (--msa-font-size) is consumed by .msa-residue,
+   * .msa-histogram-cell, .msa-ruler-cell and the row labels so the
+   * whole alignment grid (including names) scales together. */
+  font-size: var(--vscode-font-size);
+  display: flex;
+  flex-direction: column;
+  /* Fill the padded container exactly. box-sizing keeps the 1px border
+   * inside the height so the page doesn't overflow. */
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.static-msa-viewer:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+}
+
+.static-msa-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--bio-border);
+  background: var(--bio-panel);
+  font-family: var(--vscode-font-family);
+  /* On narrow tabs the bar would otherwise overflow horizontally and
+   * clip controls (or push the alignment grid out of view). Allow
+   * horizontal scrolling and keep children at their natural width. */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+}
+
+.static-msa-controls > * {
+  flex-shrink: 0;
+}
+
+/* Subtle scrollbar so it doesn't dominate the controls bar. */
+.static-msa-controls::-webkit-scrollbar {
+  height: 6px;
+}
+.static-msa-controls::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(120, 120, 120, 0.3));
+  border-radius: 3px;
+}
+.static-msa-controls::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(120, 120, 120, 0.5));
+}
+
+.static-msa-table {
+  flex: 1 1 auto;
+  overflow: auto;
+  /* Without these the flex item refuses to shrink below its intrinsic
+   * content size — the alignment grid is wider than the viewport, so
+   * the table grows past the wrapper, pushing the histogram and other
+   * sticky rows off-screen. */
+  min-height: 0;
+  min-width: 0;
+}
+
+.msa-page-btn,
+.msa-fullscreen-btn,
+.msa-toggle-btn,
+.msa-zoom-btn {
+  min-width: 2rem;
+  padding: 0.2rem 0.45rem;
+  color: var(--vscode-button-secondaryForeground, var(--bio-fg));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--bio-border);
+  border-radius: 2px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.msa-page-btn:hover:not(:disabled),
+.msa-fullscreen-btn:hover,
+.msa-toggle-btn:hover,
+.msa-zoom-btn:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--bio-panel));
+}
+
+.msa-page-btn:disabled,
+.msa-zoom-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.msa-zoom-btn {
+  min-width: 1.6rem;
+  padding: 0.1rem 0.4rem;
+  font-weight: 600;
+}
+
+.msa-zoom-label {
+  min-width: 2.5rem;
+  color: var(--bio-fg-muted);
+  font-size: 0.82rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+
+.msa-zoom-label:hover {
+  color: var(--bio-fg);
+}
+
+.msa-filter,
+.msa-goto,
+.msa-palette-sel {
+  padding: 0.2rem 0.45rem;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--vscode-input-foreground, var(--bio-fg));
+  background: var(--vscode-input-background, var(--bio-panel));
+  border: 1px solid var(--vscode-input-border, var(--bio-border));
+  border-radius: 2px;
+}
+
+.msa-palette-sel {
+  cursor: pointer;
+}
+
+.msa-filter { width: 10rem; }
+.msa-goto   { width: 4.5rem; font-variant-numeric: tabular-nums; }
+
+.msa-filter:focus,
+.msa-goto:focus {
+  outline: 1px solid var(--vscode-focusBorder, var(--bio-accent));
+  outline-offset: -1px;
+}
+
+.msa-filter::placeholder,
+.msa-goto::placeholder {
+  color: var(--bio-fg-muted);
+  opacity: 0.7;
+}
+
+/* Hide the up/down spinner — the input is already small. */
+.msa-goto::-webkit-inner-spin-button,
+.msa-goto::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.msa-stats {
+  display: inline-flex;
+  gap: 0.75rem;
+  margin-left: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--bio-border);
+  color: var(--bio-fg-muted);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.msa-stat {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: baseline;
+  cursor: help;
+}
+
+.msa-stat:hover .msa-stat-k {
+  opacity: 1;
+  color: var(--bio-fg);
+}
+
+.msa-stat-k {
+  color: var(--bio-fg-muted);
+  opacity: 0.75;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+.msa-stat-v {
+  color: var(--bio-fg);
+}
+
+.msa-fullscreen-btn {
+  margin-left: auto;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.msa-fullscreen-btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.msa-page-label {
+  min-width: 8.5rem;
+  color: var(--bio-fg-muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.msa-toggle-btn[aria-pressed="true"] {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  border-color: var(--vscode-button-background);
+}
+
+.static-msa-row {
+  display: grid;
+  /* Width set in JS via --msa-label-width. Drag the handle on the
+   * column edge, or pull below ~24 px to snap to 0 (hide). */
+  grid-template-columns: var(--msa-label-width, 12rem) 1fr;
+  min-width: max-content;
+  border-bottom: 1px solid var(--bio-border);
+  /* Scoped layout/style — style recalc and reflow stay inside the row
+   * subtree instead of rippling into siblings on every scroll redraw. */
+  contain: layout style;
+}
+
+/* Virtual list of hit rows. Height set in JS = filtered.length × rh.
+ * Rows inside are absolutely positioned and translated to their slot;
+ * only rows in or near the viewport are present in the DOM. */
+.static-msa-list {
+  position: relative;
+}
+
+.static-msa-list > .static-msa-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Row height tracks zoom; matches the JS rowHeight() formula. */
+  height: calc(var(--msa-font-size, 10px) * 1.25);
+  border-bottom: 0;
+  /* Y offset is set via JS as `transform: translateY(<rh*idx>px)`.
+   * `top` would trigger layout on every scroll redraw; transform stays
+   * on the compositor. */
+  will-change: transform;
+}
+
+/* Inside the virtual list, drop vertical padding so the rendered cell
+ * height matches the absolute row height exactly. */
+.static-msa-list > .static-msa-row .static-msa-label,
+.static-msa-list > .static-msa-row .static-msa-seq {
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: calc(var(--msa-font-size, 10px) * 1.25);
+}
+
+.static-msa-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  /* Height tracks zoom so digits don't get clipped. */
+  height: calc(var(--msa-font-size, 10px) * 1.6);
+  border-bottom: 1px solid var(--bio-border);
+  background: var(--bio-panel);
+}
+
+.static-msa-ruler .static-msa-label {
+  font-family: var(--vscode-font-family);
+  font-size: 0.78rem;
+  color: var(--bio-fg-muted);
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 0.05rem;
+}
+
+.static-msa-ruler .static-msa-seq {
+  padding: 0 0.5rem;
+  background: var(--bio-panel);
+  height: 100%;
+  white-space: pre;
+  display: flex;
+  align-items: flex-end;
+}
+
+.msa-ruler-cell {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  font-size: var(--msa-font-size, 10px);
+  font-family: var(--bio-mono);
+  color: var(--bio-fg-muted);
+  line-height: 1;
+}
+
+.msa-ruler-tick {
+  border-left: 1px solid var(--bio-border);
+  margin-left: -1px;
+}
+
+.msa-ruler-insert {
+  opacity: 0.3;
+}
+
+.static-msa-histogram {
+  position: sticky;
+  /* Sits below the sticky ruler. */
+  top: calc(var(--msa-font-size, 10px) * 1.6);
+  z-index: 4;
+  /* JS sets --msa-hist-height in pixels; drag the bottom edge to resize. */
+  height: var(--msa-hist-height, 26px);
+  border-bottom: 1px solid var(--bio-border);
+  background: var(--bio-panel);
+}
+
+.static-msa-histogram .static-msa-label {
+  font-family: var(--vscode-font-family);
+  font-size: 0.85em;
+  display: flex;
+  align-items: center;
+}
+
+.static-msa-histogram .static-msa-seq {
+  /* Horizontal padding must match .static-msa-seq so bars line up with
+   * residue cells. Vertical padding stays 0 — bars span the full row. */
+  padding: 0 0.5rem;
+  background: var(--bio-panel);
+  height: var(--msa-hist-height, 26px);
+  white-space: pre;
+}
+
+.msa-histogram-cell {
+  display: inline-block;
+  position: relative;
+  width: 1ch;
+  /* Use the same explicit height as the body — `height: 100%` here
+   * relied on a percentage chain through a grid item that was collapsing
+   * to 0 in some layouts, leaving bars invisible despite valid styles. */
+  height: var(--msa-hist-height, 26px);
+  vertical-align: bottom;
+  /* Cell width tracks zoom so bars stay aligned to residue columns. */
+  font-size: var(--msa-font-size, 10px);
+  font-family: var(--bio-mono);
+}
+
+.msa-histogram-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--bio-accent);
+  opacity: 0.55;
+}
+
+.msa-histogram-color-btn {
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.msa-histogram-color-btn:hover {
+  border-color: var(--bio-accent);
+}
+.msa-histogram-color-btn[aria-pressed="true"] {
+  color: var(--bio-accent);
+  border-color: rgba(70, 130, 230, 0.35);
+}
+
+/* Inline progress-bar glyph at the left of each row label — visual cue
+ * for residue portion (1 - gap fraction). Sits before the head text so
+ * it stays visible even when the label clips long names with ellipsis.
+ * The fill width is driven by --p (0..1). */
+.msa-row-glyph {
+  display: inline-block;
+  width: 18px;
+  height: 6px;
+  margin-right: 0.3rem;
+  border: 1px solid var(--bio-border);
+  border-radius: 1px;
+  background: transparent;
+  position: relative;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.msa-row-glyph::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100% * var(--p, 0));
+  background: var(--bio-accent);
+  opacity: 0.55;
+}
+
+/* Compact checkbox toggle for the controls bar (e.g. "first = query").
+ * Smaller than a button, larger hit target than a bare checkbox. */
+.msa-checkbox-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.35rem;
+  font-family: var(--vscode-font-family);
+  font-size: 0.85em;
+  color: var(--bio-fg);
+  cursor: pointer;
+  user-select: none;
+  border-radius: 2px;
+}
+.msa-checkbox-toggle:hover {
+  background: var(--vscode-list-hoverBackground, transparent);
+}
+.msa-checkbox-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.msa-histogram-insert {
+  background: transparent;
+  opacity: 0.3;
+}
+
+.msa-histogram-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 5;
+  user-select: none;
+}
+
+.msa-histogram-resize:hover,
+.msa-histogram-resize.dragging {
+  background: var(--bio-accent);
+  opacity: 0.4;
+}
+
+.static-msa-query {
+  position: sticky;
+  /* Sits flush below ruler + histogram. */
+  top: calc(var(--msa-font-size, 10px) * 1.6 + var(--msa-hist-height, 30px));
+  z-index: 3;
+  border-bottom-color: var(--bio-accent);
+  box-shadow: 0 1px 0 var(--bio-accent);
+}
+
+.static-msa-query .static-msa-label,
+.static-msa-query .static-msa-seq {
+  background: var(--vscode-editor-selectionBackground, var(--bio-panel));
+}
+
+.static-msa-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  overflow: hidden;
+  padding: 0.12rem 0.5rem;
+  border-right: 1px solid var(--bio-border);
+  background: var(--bio-panel);
+  color: var(--bio-fg-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Sequence-name labels scale with the residue zoom so they stay
+   * proportional to the data. */
+  font-size: var(--msa-font-size, 10px);
+  font-family: var(--bio-mono);
+}
+
+/* When the column is dragged to 0, hide labels entirely (border + padding). */
+.static-msa-viewer[data-label-collapsed="true"] .static-msa-label {
+  border-right: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.msa-label-resize {
+  position: absolute;
+  /* Inline `top` is set in JS to match controls.offsetHeight; this
+   * fallback covers first paint before the JS runs. */
+  top: 2.4rem;
+  bottom: 0;
+  left: var(--msa-label-width, 12rem);
+  width: 6px;
+  margin-left: -3px;
+  z-index: 50;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.msa-label-resize:hover {
+  background: var(--bio-accent);
+  opacity: 0.3;
+}
+
+.msa-label-resize.dragging {
+  background: var(--bio-accent);
+  opacity: 0.5;
+}
+
+/* Make the handle discoverable when the column is hidden. */
+.static-msa-viewer[data-label-collapsed="true"] .msa-label-resize {
+  background: var(--bio-accent);
+  opacity: 0.18;
+  width: 4px;
+  margin-left: 0;
+}
+
+.static-msa-viewer[data-label-collapsed="true"] .msa-label-resize:hover {
+  opacity: 0.4;
+}
+
+.static-msa-seq {
+  padding: 0.12rem 0.5rem;
+  white-space: pre;
+}
+
+.msa-residue {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  /* Only residue cells consume zoom — controls/labels stay at UI size. */
+  font-size: var(--msa-font-size, 10px);
+  font-family: var(--bio-mono);
+  line-height: 1.25;
+}
+
+.msa-residue.msa-insert {
+  opacity: 0.55;
+}
+
+/* Column-virt left/right spacer cells. Carry the cell width but
+ * nothing else — no hover, no flash, no palette tint. The hover
+ * handler also rejects them by class, but pointer-events: none
+ * stops the events at the source. */
+.msa-residue.msa-spacer {
+  background: transparent;
+  pointer-events: none;
+}
+
+/* Hidden sentinel used to measure `1ch` in pixels at the active
+ * --msa-font-size. Not in the layout; absolutely positioned off-screen
+ * but still rendered so getBoundingClientRect returns a real width. */
+.msa-cell-probe {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.msa-residue.msa-flash {
+  outline: 2px solid var(--bio-accent);
+  outline-offset: 0;
+  animation: msa-flash 0.9s ease-out;
+}
+
+@keyframes msa-flash {
+  0%   { box-shadow: 0 0 0 0 var(--bio-accent); }
+  20%  { box-shadow: 0 0 0 6px var(--bio-accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* ============== Color palettes ============== */
+
+/* Default — Chemical (verbatim from plmMSA). */
+.msa-aa-acidic     { background: #e43d30; color: #fff; }
+.msa-aa-basic      { background: #1f66d1; color: #fff; }
+.msa-aa-polar      { background: #2da44e; color: #fff; }
+.msa-aa-hydrophobic{ background: #f2d13d; color: #222; }
+.msa-aa-aromatic   { background: #18a3a8; color: #fff; }
+.msa-aa-cysteine   { background: #d29b00; color: #222; }
+.msa-aa-glycine    { background: #e6e6e6; color: #222; }
+.msa-aa-proline    { background: #c47bd6; color: #fff; }
+.msa-aa-gap        { background: transparent; color: #888; }
+.msa-aa-other      { background: #ecebe2; color: var(--bio-fg-muted); }
+
+/* Clustal X — chemical groupings happen to align cleanly with our
+ * chemistry classes, so we just override the colors. Cysteine joins
+ * hydrophobic blue per the standard Clustal X scheme. */
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-hydrophobic,
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-cysteine {
+  background: #80a0f0; color: #222;
+}
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-acidic   { background: #c048c0; color: #fff; }
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-basic    { background: #f01505; color: #fff; }
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-polar    { background: #15a4a4; color: #fff; }
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-aromatic { background: #15c0c0; color: #222; }
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-glycine  { background: #f09048; color: #fff; }
+.static-msa-viewer[data-palette="clustalx"] .msa-aa-proline  { background: #c0c000; color: #222; }
+
+/* Zappo — most groups align with chemistry, but H is a positive
+ * residue under Zappo while we classify it as aromatic; an explicit
+ * per-letter override pulls H out of aromatic into positive blue. */
+.static-msa-viewer[data-palette="zappo"] .msa-aa-hydrophobic { background: #ffafaf; color: #222; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-acidic      { background: #ff0000; color: #fff; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-basic       { background: #6464ff; color: #fff; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-polar       { background: #00ff00; color: #222; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-cysteine    { background: #ffff00; color: #222; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-glycine     { background: #ff00ff; color: #fff; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-proline     { background: #ff00ff; color: #fff; }
+.static-msa-viewer[data-palette="zappo"] .msa-aa-aromatic    { background: #ffc800; color: #222; }
+.static-msa-viewer[data-palette="zappo"] .msa-residue[data-aa="H"] { background: #6464ff; color: #fff; }
+
+/* Taylor — every amino acid gets its own hue. Wipe the chemical
+ * defaults first, then per-letter overrides. */
+.static-msa-viewer[data-palette="taylor"] .msa-residue {
+  background: transparent;
+  color: var(--bio-fg);
+}
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="A"] { background: #ccff00; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="R"] { background: #0000ff; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="N"] { background: #cc00ff; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="D"] { background: #ff0000; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="C"] { background: #ffff00; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="E"] { background: #ff0066; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="Q"] { background: #ff00cc; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="G"] { background: #ff9900; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="H"] { background: #0066ff; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="I"] { background: #66ff00; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="L"] { background: #33ff00; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="K"] { background: #6600ff; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="M"] { background: #00ff00; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="F"] { background: #00ff66; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="P"] { background: #ffcc00; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="S"] { background: #ff3300; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="T"] { background: #ff6600; color: #fff; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="W"] { background: #00ccff; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="Y"] { background: #00ffcc; color: #222; }
+.static-msa-viewer[data-palette="taylor"] .msa-residue[data-aa="V"] { background: #99ff00; color: #222; }
+
+.static-msa-empty {
+  padding: 1rem;
+  color: var(--bio-fg-muted);
+}
+
+/* Templates view — shown when the active a3m/a2m/fas looks like a
+ * hmmsearch/hhsuite template manifest. Replaces the residue grid;
+ * Toolbar stays put so the user can flip back to MSA mode. */
+.msa-templates-mapsection {
+  padding: 0.5rem 0.75rem 0.25rem;
+}
+
+.msa-templates-section {
+  padding: 0 0.75rem 0.5rem;
+}
+
+.msa-templates-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--vscode-font-family);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0.4rem 0;
+}
+
+.msa-templates-table th,
+.msa-templates-table td {
+  padding: 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--bio-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.msa-templates-table th {
+  color: var(--bio-fg-muted);
+  font-weight: 600;
+}
+
+.msa-templates-table th.r,
+.msa-templates-table td.r {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.msa-templates-table tbody tr:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04));
+}
+
+/* ============== HHR pairwise viewer ============== */
+
+.hhr-viewer {
+  /* Inherits .static-msa-viewer (border, controls bar, fullscreen). */
+  height: calc(100vh - 1rem);
+}
+
+.hhr-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+.hhr-hits {
+  margin-bottom: 1rem;
+}
+
+.hhr-hit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--vscode-font-family);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hhr-hit-table th,
+.hhr-hit-table td {
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid var(--bio-border);
+  text-align: left;
+  white-space: nowrap;
+}
+.hhr-hit-table th {
+  color: var(--bio-fg-muted);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.hhr-hit-table th:hover { color: var(--bio-fg); }
+.hhr-hit-table th.active { color: var(--bio-fg); }
+.hhr-hit-table td.r,
+.hhr-hit-table th.r { text-align: right; }
+.hhr-hit-table tbody tr { cursor: pointer; }
+.hhr-hit-table tbody tr:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.04)); }
+
+/* HitMap (SVG) — sits above the hit table; one rect per hit, packed
+ * into rows so non-overlapping hits share a row. Width scales to the
+ * container; height grows with the number of stacked rows. */
+.hhr-mapsection {
+  margin-bottom: 1rem;
+}
+
+.hhr-hitmap {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--bio-border);
+  border-radius: 3px;
+  background: var(--bio-panel);
+}
+
+.hhr-hitmap-axis {
+  stroke: var(--bio-border);
+  stroke-width: 1;
+}
+
+.hhr-hitmap-tick {
+  stroke: var(--bio-fg-muted);
+  stroke-width: 1;
+}
+
+.hhr-hitmap-ticklabel {
+  fill: var(--bio-fg-muted);
+  font-family: var(--vscode-font-family);
+  font-size: 7px;
+}
+
+.hhr-hitmap-rect {
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity 0.1s ease-in-out;
+}
+
+.hhr-hitmap-rect:hover {
+  opacity: 1;
+  stroke: var(--bio-fg);
+  stroke-width: 1;
+}
+
+/* Domain/template name drawn over each rect when the rect is wide
+ * enough. White text reads against every probColor in the palette. */
+.hhr-hitmap-rectlabel {
+  fill: #fff;
+  font-family: var(--vscode-font-family);
+  font-size: 7px;
+  font-weight: 600;
+  pointer-events: none;
+  paint-order: stroke fill;
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 1;
+}
+
+.msa-break-label {
+  color: var(--bio-fg-muted);
+  font-size: 0.78rem;
+  margin-left: 0.4rem;
+}
+
+/* Color-off override: residues fall back to plain mono text when the
+ * user disables the per-residue palette. !important so we beat the
+ * per-palette and Taylor per-AA rules. */
+.static-msa-viewer[data-color-off="true"] .msa-residue {
+  background: transparent !important;
+  color: var(--bio-fg) !important;
+}
+.static-msa-viewer[data-color-off="true"] .msa-residue.msa-aa-gap {
+  color: var(--bio-fg-muted) !important;
+}
+
+.hhr-block {
+  margin-bottom: 1.5rem;
+  scroll-margin-top: 0.5rem;
+}
+
+.hhr-block-header {
+  font-size: 0.92rem;
+  margin-bottom: 0.2rem;
+}
+
+.hhr-block-num {
+  color: var(--bio-fg-muted);
+  margin-right: 0.25rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hhr-block-num:hover {
+  color: var(--bio-fg);
+  text-decoration: underline;
+}
+
+/* Brief flash on the hit-table row that was just jumped to from a
+ * "No N." click. Mirrors the column-flash on goto-column. */
+.hhr-row-flash > td {
+  animation: hhr-row-flash-anim 0.9s ease-out;
+}
+@keyframes hhr-row-flash-anim {
+  0%   { background: var(--bio-accent); }
+  100% { background: transparent; }
+}
+
+.hhr-block-meta {
+  font-size: 0.78rem;
+  color: var(--bio-fg-muted);
+  margin-bottom: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.hhr-chunk {
+  margin-bottom: 0.65rem;
+  /* Each chunk is a vertically-stacked group of tracks. */
+}
+
+.hhr-line {
+  display: grid;
+  /* Seq column is `auto` (sized to actual content) instead of `1fr`,
+   * so the end-position number sits right after the last residue of
+   * the chunk — not floated to the right edge of the window. */
+  grid-template-columns: 7rem 2.5rem auto 2.5rem;
+  /* The 4 columns add up to less than the body width, so the row
+   * naturally left-aligns; nothing fills the remaining space. */
+  justify-content: start;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-family: var(--bio-mono);
+  /* Sequence cells consume zoom; the row line-height matches so they
+   * sit on a tidy baseline. */
+  line-height: 1.25;
+}
+
+.hhr-label {
+  color: var(--bio-fg-muted);
+  /* Pinned at a small fixed size — these are metadata and shouldn't
+   * grow with zoom (which would crowd the alignment grid). */
+  font-size: 0.72rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.hhr-pos {
+  color: var(--bio-fg-muted);
+  font-size: 0.7rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.hhr-seq {
+  white-space: pre;
+  /* Residues inside use --msa-font-size already (via .msa-residue rule). */
+}
+
+.hhr-plain {
+  font-family: var(--bio-mono);
+  font-size: var(--msa-font-size, 10px);
+  white-space: pre;
+}
+
+/* Visual differentiation between line kinds. */
+.hhr-line-agree .hhr-plain-agree { color: var(--bio-accent); opacity: 0.85; }
+.hhr-line-confidence .hhr-plain-confidence { color: var(--bio-fg-muted); }
+.hhr-line-pp .hhr-plain-pp { color: var(--bio-fg-muted); }
+
+/* Secondary-structure track colors (helix red, strand yellow, coil grey). */
+.msa-ss-h { color: #d83434; }
+.msa-ss-g { color: #d36336; }
+.msa-ss-i { color: #a83434; }
+.msa-ss-e { color: #b08c00; }
+.msa-ss-b { color: #897000; }
+.msa-ss-t { color: #2d8a48; }
+.msa-ss-s { color: #2d8a48; opacity: 0.7; }
+.msa-ss-c { color: var(--bio-fg-muted); }
+.msa-ss-other { color: var(--bio-fg-muted); }
+
+.hhr-line-ss .msa-residue {
+  font-size: var(--msa-font-size, 10px);
+  font-family: var(--bio-mono);
+  background: transparent;
+}
+
+.msa-tooltip {
+  position: fixed;
+  z-index: 100;
+  max-width: 28rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--vscode-editorHoverWidget-background, var(--bio-panel));
+  color: var(--vscode-editorHoverWidget-foreground, var(--bio-fg));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--bio-border));
+  border-radius: 3px;
+  font-family: var(--vscode-font-family);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.msa-tooltip[hidden] {
+  display: none;
+}
+
+/* DB link rendered around recognized accessions in headers + labels.
+ * Subtle by default — accent color, no underline — so it doesn't
+ * compete with content. Underline shows on hover for affordance. */
+.msa-dblink {
+  color: var(--vscode-textLink-foreground, var(--bio-accent));
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.msa-dblink:hover,
+.msa-dblink:focus {
+  color: var(--vscode-textLink-activeForeground, var(--bio-accent));
+  text-decoration: underline;
+  outline: none;
+}
+
+/* Tiny secondary action next to a PDB link — opens the .pdb inside
+ * the host editor. Sits inline so it travels with the accession. */
+.msa-dblink-code {
+  display: inline-block;
+  margin-left: 0.25rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--vscode-textLink-foreground, var(--bio-accent));
+  border-radius: 2px;
+  background: transparent;
+  color: var(--vscode-textLink-foreground, var(--bio-accent));
+  font-family: var(--vscode-font-family);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  vertical-align: baseline;
+  cursor: pointer;
+  user-select: none;
+}
+
+.msa-dblink-code:hover {
+  background: var(--vscode-textLink-foreground, var(--bio-accent));
+  color: var(--vscode-button-foreground, #fff);
+}
+
+/* Twin-icon secondary link chips next to a primary header link.
+ * Used to expose the canonical entry pages (UniProt, AFDB) without a
+ * hidden modifier gesture. Subdued by default; pop on hover. */
+.msa-dblink-sec {
+  display: inline-block;
+  margin-left: 0.2rem;
+  padding: 0 0.2rem;
+  border: 1px solid var(--vscode-textLink-foreground, var(--bio-accent));
+  border-radius: 2px;
+  background: transparent;
+  color: var(--vscode-textLink-foreground, var(--bio-accent));
+  font-family: var(--vscode-font-family);
+  font-size: 0.55rem;
+  line-height: 1.2;
+  vertical-align: baseline;
+  text-decoration: none;
+  opacity: 0.65;
+}
+
+.msa-dblink-sec:hover,
+.msa-dblink-sec:focus {
+  background: var(--vscode-textLink-foreground, var(--bio-accent));
+  color: var(--vscode-button-foreground, #fff);
+  opacity: 1;
+  outline: none;
+}
+
+/* Inside a static-msa-label the link inherits the label's tight padding
+ * and ellipsis behavior; nothing extra needed. */

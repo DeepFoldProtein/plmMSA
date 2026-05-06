@@ -8,6 +8,11 @@
   <!-- Inline SVG favicon so the browser doesn't 404-spam /ui/favicon.ico. -->
   <link rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E">
+  <!-- viewer.css ships verbatim from vv137/vscode-bioinformatics; load it
+       first so styles.css can override the page-level rules (the upstream
+       pins html/body to 100vh because the VS Code webview owns the
+       viewport — we don't). -->
+  <link rel="stylesheet" href="viewer.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -131,6 +136,10 @@
       if (b) b.textContent = origin + "/v2/colabfold/otalign";
     })();
   </script>
+  <!-- viewer.module.js exposes window.MsaViewer.create — vendored from
+       vv137/vscode-bioinformatics. Load before app.js so the wrapper
+       can call MsaViewer.create on init. -->
+  <script src="viewer.module.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 
