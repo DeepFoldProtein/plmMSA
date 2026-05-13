@@ -40,6 +40,10 @@ _result_cache: ResultCache | None = None
 # is `plmmsa.templates.TemplatesRealignOrchestrator`.
 _templates_orchestrator: Any | None = None
 
+# Same pattern for the FASTA-shape pairwise aligner — real type is
+# `plmmsa.align.pairwise.PairwiseAlignOrchestrator`.
+_pairwise_orchestrator: Any | None = None
+
 
 async def _get_job_store() -> JobStore:
     """Lazy singleton — production uses CACHE_URL; tests override via
@@ -828,4 +832,185 @@ async def templates_realign(
         format=result.format,
         payload=result.payload,
         stats=result.stats,
+    )
+
+
+# ---------------------------------------------------------------------------
+# /v2/align/pairwise — pairwise OTalign between a query and target sequences
+# ---------------------------------------------------------------------------
+
+
+class PairwiseAlignTargetBody(BaseModel):
+    """One target entry: opaque id + raw residue sequence."""
+
+    id: str = Field(..., min_length=1, max_length=256)
+    sequence: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Target residues. Normalized server-side: uppercase, whitespace-stripped, gap-stripped."
+        ),
+    )
+
+
+class PairwiseAlignBody(BaseModel):
+    """Request body for `/v2/align/pairwise`.
+
+    Higher-level surface than `/v2/align`: that one takes raw embeddings;
+    this one takes FASTA-shape inputs and runs the embed step
+    server-side. See `docs/align-pairwise-spec.md`.
+    """
+
+    query_id: str = Field(
+        "query",
+        min_length=1,
+        max_length=256,
+        description="Opaque id for the query — echoed back in `stats`.",
+    )
+    query_sequence: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Query residues. Normalized server-side: uppercase, whitespace-stripped, gap-stripped."
+        ),
+    )
+    targets: list[PairwiseAlignTargetBody] = Field(
+        ...,
+        min_length=1,
+        description="One or more targets to align against the query.",
+    )
+    model: str | None = Field(
+        None,
+        description="PLM backend id; default `ankh_large`.",
+    )
+    mode: str | None = Field(
+        None,
+        description="OTalign DP mode; default `glocal`.",
+    )
+    aligner: str | None = Field(
+        None,
+        description="Aligner id; default `otalign`.",
+    )
+    options: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra aligner tunables passed straight through.",
+    )
+    emit_a3m: bool = Field(
+        True,
+        description=(
+            "When true, the response includes a rendered A3M payload "
+            "(one row per kept alignment, each row exactly "
+            "`len(query_sequence)` characters of [A-Z-]). Set false "
+            "to save bandwidth when only `columns` is needed."
+        ),
+    )
+    sort_by_score: bool = Field(
+        False,
+        description=(
+            "When true, alignments are emitted in score-descending "
+            "order (best hit first). Default false preserves input order."
+        ),
+    )
+
+
+class PairwiseAlignmentBody(BaseModel):
+    target_id: str
+    score: float
+    # JSON-friendly column shape: `[[qi, ti], ...]` with `-1` marking gaps.
+    columns: list[list[int]]
+    query_start: int
+    query_end: int
+    target_start: int
+    target_end: int
+    a3m_row: str | None = None
+
+
+class PairwiseAlignResponseBody(BaseModel):
+    alignments: list[PairwiseAlignmentBody]
+    stats: dict[str, Any]
+    a3m: str | None = None
+
+
+def _build_pairwise_orchestrator() -> Any:
+    """Construct the production pairwise orchestrator from env vars."""
+    from plmmsa.align.pairwise import (
+        PairwiseAlignConfig,
+        PairwiseAlignOrchestrator,
+    )
+    from plmmsa.templates import HttpTransport
+
+    embedding_url = os.environ.get("EMBEDDING_URL", "http://embedding:8081")
+    align_url = os.environ.get("ALIGN_URL", "http://align:8083")
+    timeout_s = float(os.environ.get("PLMMSA_PAIRWISE_TIMEOUT_S", "900"))
+
+    transport = HttpTransport(
+        embedding_url=embedding_url,
+        align_url=align_url,
+        timeout_s=timeout_s,
+    )
+    return PairwiseAlignOrchestrator(
+        config=PairwiseAlignConfig(),
+        transport=transport,
+    )
+
+
+def _get_pairwise_orchestrator() -> Any:
+    global _pairwise_orchestrator
+    if _pairwise_orchestrator is None:
+        _pairwise_orchestrator = _build_pairwise_orchestrator()
+    return _pairwise_orchestrator
+
+
+@router.post("/align/pairwise", response_model=PairwiseAlignResponseBody)
+async def align_pairwise(
+    body: PairwiseAlignBody,
+    request: Request,
+) -> PairwiseAlignResponseBody:
+    """Run a pairwise alignment between a query FASTA and one or more
+    target FASTAs.
+
+    Sync endpoint — runs the orchestrator inline and returns the result
+    JSON. **Public** (no bearer token): unlike `/v2/embed`, `/v2/align`,
+    and `/v2/templates/realign`, this surface is the recommended entry
+    point for ColabFold and other external clients and is reachable
+    without credentials. Abuse protection comes from the per-IP rate
+    limiter in the api middleware and Cloudflare WAF at the edge.
+    """
+    from plmmsa.align.pairwise import (
+        PairwiseAlignRequest,
+        PairwiseAlignTarget,
+    )
+
+    orch = _get_pairwise_orchestrator()
+    result = await orch.run(
+        PairwiseAlignRequest(
+            query_id=body.query_id,
+            query_sequence=body.query_sequence,
+            targets=[
+                PairwiseAlignTarget(target_id=t.id, sequence=t.sequence) for t in body.targets
+            ],
+            model=body.model,
+            mode=body.mode,
+            aligner=body.aligner,
+            options=dict(body.options),
+            emit_a3m=body.emit_a3m,
+            sort_by_score=body.sort_by_score,
+        )
+    )
+    return PairwiseAlignResponseBody(
+        alignments=[
+            PairwiseAlignmentBody(
+                target_id=a.target_id,
+                score=a.score,
+                columns=[[qi, ti] for qi, ti in a.columns],
+                query_start=a.query_start,
+                query_end=a.query_end,
+                target_start=a.target_start,
+                target_end=a.target_end,
+                a3m_row=a.a3m_row,
+            )
+            for a in result.alignments
+        ],
+        stats=result.stats,
+        a3m=result.a3m,
     )

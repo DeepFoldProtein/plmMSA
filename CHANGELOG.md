@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `POST /v2/align/pairwise` — FASTA-shape pairwise alignment. Takes
+  a query sequence + one or more target sequences (`{id, sequence}`),
+  runs OTalign (or another configured aligner) over PLM embeddings,
+  and returns per-target columns + score + half-open spans, plus an
+  optional rendered A3M payload (`emit_a3m`, default true). The A3M
+  is ColabFold/AlphaFold-shape: query at index 0, then one record
+  per target with insertions kept as lowercase **between** the first
+  and last matched query column (leading/trailing inserts trimmed).
+  Higher-level surface than `/v2/align` (which takes raw
+  embeddings); sibling of `/v2/templates/realign` (which re-aligns an
+  existing hmmsearch A3M and uses a stricter no-lowercase rendering
+  to preserve hmmsearch shape). **Public endpoint** -- unlike the
+  rest of `/v2/`, this surface does not require a bearer token; it
+  is the recommended integration point for ColabFold and other
+  external clients. Abuse protection comes from the api per-IP rate
+  limiter + Cloudflare WAF at the edge. Per-request
+  `sort_by_score`, `model`, `mode`, `aligner`, free-form `options`.
+  Spec: [docs/align-pairwise-spec.md](./docs/align-pairwise-spec.md).
+- `bin/align_pairwise_client.py` — reference client for the public
+  `/v2/align/pairwise` endpoint. Defaults `--base-url` to
+  `https://plmmsa.deepfold.org`; `--token` is optional (only needed
+  against a gated deployment). Reads query / target FASTA files,
+  prints a per-target summary, optionally writes the A3M and full
+  JSON response to disk. `--chunk-size N` transparently splits large
+  target lists into multiple `/v2/align/pairwise` calls and merges
+  the responses (query header on top, global score sort honored
+  across the merged output); `--max-length N` filters over-long
+  records client-side so one bad target does not reject the batch.
+  `--out-hist PATH` lazy-imports matplotlib and writes a
+  score-histogram PNG (core post + merge path stays stdlib-only).
+  Inline `--query-seq` / `--target-seq` for one-liner smoke tests.
 - `POST /v2/templates/realign` — re-align an existing hmmsearch-style
   A3M against the query under OTalign / Ankh-Large / glocal. Output
   rows are exactly `query_len` chars from `[A-Z-]` (template residues

@@ -77,6 +77,23 @@ header (between `length:N` and the description tail). Bearer-gated.
 Operator walkthrough:
 [`docs/templates-realign.md`](./docs/templates-realign.md).
 
+### Pairwise FASTA → OTalign
+
+For pairwise alignment between a query and an arbitrary set of target
+sequences (no hmmsearch upstream required), `POST /v2/align/pairwise`
+takes FASTA-shape inputs and returns per-target alignment columns,
+scores, half-open spans, and an optional rendered A3M payload.
+**This endpoint is public** -- unlike the rest of `/v2/`, it does
+not require a bearer token, so ColabFold and other external clients
+can hit it directly against `https://plmmsa.deepfold.org`.
+Reference client:
+[`bin/align_pairwise_client.py`](./bin/align_pairwise_client.py)
+(supports `--chunk-size` for target lists larger than the server's
+per-request cap and `--out-hist` for an optional score-histogram
+PNG).
+**API spec for integrators:**
+[`docs/align-pairwise-spec.md`](./docs/align-pairwise-spec.md).
+
 ### Response format
 
 plmMSA returns A3M by default — the same format ColabFold / AlphaFold
