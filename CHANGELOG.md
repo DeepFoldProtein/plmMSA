@@ -46,7 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no matching query column are dropped, no lowercase A3M
   insertions). Headers preserve the original domain id + tail tokens
   and gain a re-intervalled `/start-end` plus a `score:N.NNN` token
-  at the end of the technical-tokens section, before the description. Bearer-gated like `/v2/embed`. Per-request
+  at the end of the technical-tokens section, before the description.
+  Public endpoint -- no bearer token required, matching
+  `/v2/align/pairwise`. Per-request
   `sort_by_score` (default false) toggles between input-order and
   best-hit-first output. Operator walkthrough:
   [docs/templates-realign.md](./docs/templates-realign.md).

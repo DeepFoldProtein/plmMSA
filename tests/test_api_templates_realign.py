@@ -1,9 +1,9 @@
 """Integration tests for `POST /v2/templates/realign`.
 
-Pattern matches `tests/test_api_align.py`: TestClient against the live
-FastAPI app, with the orchestrator stubbed at the module-level
-`_templates_orchestrator` handle. Auth is gated by `ADMIN_TOKEN`,
-matching `/v2/embed` and `/v2/align`.
+Pattern matches `tests/test_api_align_pairwise.py`: TestClient against
+the live FastAPI app, with the orchestrator stubbed at the module-level
+`_templates_orchestrator` handle. Unlike the rest of `/v2/`, this
+endpoint is **public** -- no bearer token required.
 """
 
 from __future__ import annotations
@@ -68,7 +68,13 @@ def stub_orchestrator(monkeypatch: pytest.MonkeyPatch):
     return stub
 
 
-def test_missing_token_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_token_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_orchestrator: _StubOrchestrator,
+) -> None:
+    """`/v2/templates/realign` is the public surface -- requests without
+    an Authorization header must succeed, not 401.
+    """
     monkeypatch.setenv("ADMIN_TOKEN", "secret")
     from plmmsa.api import app
 
@@ -80,8 +86,10 @@ def test_missing_token_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
                 "a3m": ">t/1-3\nABC\n",
             },
         )
-    assert resp.status_code == 401
-    assert resp.json()["code"] == "E_AUTH_MISSING"
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["format"] == "a3m"
+    assert body["stats"]["pipeline"] == "templates_realign"
 
 
 def test_happy_path_returns_payload_and_stats(

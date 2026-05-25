@@ -24,9 +24,9 @@ POST {base_url}/v2/templates/realign
 | Path        | `/v2/templates/realign`                                                                                                                                                |
 | Body        | JSON, UTF-8, see [§3](#3-request-body)                                                                                                                                 |
 | Response    | JSON, UTF-8, see [§4](#4-response-body)                                                                                                                                |
-| Auth        | bearer token, see [§2](#2-authentication)                                                                                                                              |
+| Auth        | **none** -- public endpoint, see [§2](#2-authentication)                                                                                                               |
 | Idempotency | every successful run is a pure function of the request body — same body in, same body out (modulo non-deterministic OTalign hyperparameters; see [§7](#7-determinism)) |
-| Rate limits | covered by the api service's per-IP / per-token limiter; no endpoint-specific limits today                                                                             |
+| Rate limits | covered by the api service's per-IP limiter + Cloudflare WAF at the edge; no endpoint-specific limits today                                                            |
 
 The endpoint is **synchronous**. Response time is dominated by the PLM
 embedding cost — typical single-query, ~600-record inputs return in
@@ -37,21 +37,22 @@ submit-then-poll variant; the sync path is committed to stay.
 
 ## 2. Authentication
 
-```
-Authorization: Bearer <token>
-```
+**None.** `/v2/templates/realign` is a public endpoint -- requests
+without an `Authorization` header are accepted, matching
+`/v2/align/pairwise`. This is the recommended integration point for
+ColabFold and other external clients that already have an hmmsearch
+A3M in hand.
 
-Every request must carry a bearer token. Two ways to obtain one:
+Abuse protection is enforced at two layers and does not depend on a
+token:
 
-- The operator-only `ADMIN_TOKEN` env var on the api service (used by
-  the operator themselves).
-- A scoped client token minted via the admin API (`POST
-  /admin/tokens`); see [`submitting-msa.md`](./submitting-msa.md) for
-  the recipe.
+- Cloudflare WAF + per-IP rate-limiting rules on the tunnel hostname.
+- The api service's in-process per-IP limiter (defense in depth for
+  local / non-CF deployments).
 
-A missing or unknown token returns `401` with code `E_AUTH_MISSING` /
-`E_AUTH_INVALID` (see [§5](#5-errors)). Tokens never appear in
-response bodies or logs.
+The other `/v2/` surfaces (`/v2/embed`, `/v2/align`, the older
+`/v2/search`) still require a bearer token; see those endpoints' specs
+for the recipe.
 
 ---
 
@@ -210,8 +211,6 @@ keys may change between versions.
 | ---- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | 400  | `E_INVALID_FASTA` | empty / non-amino-acid query, or `len(query_sequence)` ≠ a3m's match-state count, or no records survive sanity checks                                                                                                          | `query_length`, `first_drop_reason`, `drop_reasons` |
 | 400  | `E_SEQ_TOO_LONG`  | query OR any template residue count exceeds `max_query_length` (default 1022)                                                                                                                                                  | `length`, `max`, optional `target_id`               |
-| 401  | `E_AUTH_MISSING`  | `Authorization` header absent                                                                                                                                                                                                  | —                                                   |
-| 401  | `E_AUTH_INVALID`  | bearer token unknown, expired, or revoked                                                                                                                                                                                      | —                                                   |
 | 413  | `E_QUEUE_FULL`    | a3m has more records than `TemplatesRealignConfig.max_records` (default 5000)                                                                                                                                                  | `records`, `max`                                    |
 | 422  | (FastAPI default) | request body fails Pydantic validation (missing required field, wrong type, etc.). Returned by FastAPI before the orchestrator runs; body uses FastAPI's standard validation-error format, not the plmMSA error envelope above | n/a                                                 |
 | 502  | `E_INTERNAL`      | upstream embedding / align service returned an unexpected response shape or was unreachable                                                                                                                                    | `service`, `cause`, `expected`, `got`               |
@@ -229,7 +228,6 @@ silently renamed; new codes added to that enum are additive.
 
 ```bash
 curl -sS -X POST "$BASE_URL/v2/templates/realign" \
-  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
 {
@@ -247,7 +245,6 @@ jq -n --arg q "$(grep -v '^>' query.fasta | tr -d '\n')" \
       --arg a "$(cat templates.a3m)" \
       '{query_sequence:$q, a3m:$a, sort_by_score:true}' \
 | curl -sS -X POST "$BASE_URL/v2/templates/realign" \
-       -H "Authorization: Bearer $TOKEN" \
        -H "Content-Type: application/json" \
        -d @- > response.json
 ```
@@ -273,7 +270,6 @@ a3m_text = open("templates.a3m").read()
 
 resp = requests.post(
     f"{os.environ['BASE_URL']}/v2/templates/realign",
-    headers={"Authorization": f"Bearer {os.environ['TOKEN']}"},
     json={
         "query_sequence": query_seq,
         "a3m": a3m_text,
@@ -293,7 +289,6 @@ with open("realigned.a3m", "w") as f:
 
 ```bash
 curl -sS -X POST "$BASE_URL/v2/templates/realign" \
-  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query_sequence":"ABC","a3m":">t/1-5\nABCDE\n"}'
 ```
@@ -321,8 +316,6 @@ if not resp.ok:
         raise BadInput(err["detail"].get("first_drop_reason", err["message"]))
     if err["code"] == "E_QUEUE_FULL":
         raise TooManyTemplates(err["detail"]["records"])
-    if err["code"] in ("E_AUTH_MISSING", "E_AUTH_INVALID"):
-        raise AuthError(err["code"])
     if err["code"] == "E_GPU_OOM":
         # transient — try a smaller batch later
         raise RetryableError(err["code"])

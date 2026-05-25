@@ -800,7 +800,6 @@ def _get_templates_orchestrator() -> Any:
 @router.post(
     "/templates/realign",
     response_model=TemplatesRealignResponseBody,
-    dependencies=[Depends(require_admin_token)],
 )
 async def templates_realign(
     body: TemplatesRealignBody,
@@ -809,7 +808,11 @@ async def templates_realign(
     """Re-align an existing hmmsearch-style A3M against the query under
     OTalign / Ankh-Large / glocal.
 
-    Sync endpoint — runs the orchestrator inline and returns the result
+    Public endpoint -- no bearer token required, matching
+    `/v2/align/pairwise`. Abuse protection comes from the api per-IP
+    rate limiter + Cloudflare WAF at the edge.
+
+    Sync endpoint -- runs the orchestrator inline and returns the result
     JSON. Async/job lifecycle (PLAN §3 submit-then-poll) lands in a
     follow-up; for now, callers with very large inputs should expect
     the request to take minutes.

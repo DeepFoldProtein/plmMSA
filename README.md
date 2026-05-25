@@ -71,7 +71,10 @@ PDB) and want PLM-driven column placements rather than HMMER's,
 each template. Output is an A3M whose rows are exactly `query_len`
 chars from `[A-Z-]` (no lowercase insertions), with `score:N.NNN`
 stamped at the end of the technical-token section of a re-intervalled
-header (between `length:N` and the description tail). Bearer-gated.
+header (between `length:N` and the description tail). **This endpoint
+is public** -- like `/v2/align/pairwise`, it does not require a
+bearer token, so external clients can hit it directly against
+`https://plmmsa.deepfold.org`.
 **API spec for integrators:**
 [`docs/templates-realign-spec.md`](./docs/templates-realign-spec.md).
 Operator walkthrough:

@@ -12,10 +12,11 @@ OTalign / Ankh-Large / glocal. Use this when you already have a
 candidate set of structural templates (typically from an HMM scan
 against PDB) and want PLM-driven column placements rather than HMMER's.
 
-The endpoint is `POST /v2/templates/realign` on the api service. It is
-**bearer-token gated** (same auth model as `/v2/embed` and
-`/v2/align`) and currently **synchronous** — large inputs may take a
-few minutes; submit-then-poll is on the roadmap.
+The endpoint is `POST /v2/templates/realign` on the api service. It
+is **public** -- no bearer token required, matching
+`/v2/align/pairwise` -- and currently **synchronous**; large inputs
+may take a few minutes (submit-then-poll is on the roadmap). Abuse
+protection comes from the api per-IP rate limiter + Cloudflare WAF.
 
 For the design rationale (mode choice, drop-insertions rule,
 header-interval semantics) see
@@ -25,7 +26,6 @@ header-interval semantics) see
 
 ```json
 POST /v2/templates/realign
-Authorization: Bearer <token>
 Content-Type: application/json
 
 {
@@ -96,8 +96,6 @@ Stable codes (full list in [error taxonomy](../CLAUDE.md)):
 |------|--------------------|------------------------------------------------------------------------|
 | 400  | `E_INVALID_FASTA`  | empty / non-amino-acid query, or `len(query_sequence)` ≠ a3m's match-state count. |
 | 400  | `E_SEQ_TOO_LONG`   | query or any template residue count exceeds `max_query_length` (default 1022). |
-| 401  | `E_AUTH_MISSING`   | `Authorization` header absent.                                         |
-| 401  | `E_AUTH_INVALID`   | bearer token unknown or revoked.                                       |
 | 413  | `E_QUEUE_FULL`     | a3m has more records than `TemplatesRealignConfig.max_records` (default 5000). |
 | 422  | (FastAPI default)  | request body fails Pydantic validation (missing required fields).      |
 | 502  | `E_INTERNAL`       | upstream embedding / align service returned an unexpected shape.       |
@@ -108,7 +106,6 @@ Stable codes (full list in [error taxonomy](../CLAUDE.md)):
 
 ```bash
 curl -sS -X POST http://localhost:8080/v2/templates/realign \
-  -H "Authorization: Bearer $PLMMSA_TOKEN" \
   -H "Content-Type: application/json" \
   -d @- <<'JSON' | jq -r .payload > realigned.a3m
 {
@@ -127,7 +124,6 @@ jq -n --arg q "$(cat query.fasta | tail -n +2 | tr -d '\n')" \
       --arg a "$(cat templates.a3m)" \
       '{query_id:"T1104", query_sequence:$q, a3m:$a}' \
 | curl -sS -X POST http://localhost:8080/v2/templates/realign \
-       -H "Authorization: Bearer $PLMMSA_TOKEN" \
        -H "Content-Type: application/json" \
        -d @- | jq -r .payload > realigned.a3m
 ```
@@ -145,7 +141,6 @@ a3m_text = open("templates.a3m").read()
 
 resp = requests.post(
     "http://localhost:8080/v2/templates/realign",
-    headers={"Authorization": f"Bearer {os.environ['PLMMSA_TOKEN']}"},
     json={
         "query_id": "T1104",
         "query_sequence": query_seq,
