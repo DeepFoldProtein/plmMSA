@@ -69,11 +69,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/plmmsa", "src/procl"]
-# Ship the static web UI (HTML / CSS / JS) alongside the Python source.
-# Hatch treats non-.py files as package data only when we list them
-# explicitly here.
-[tool.hatch.build.targets.wheel.force-include]
-"src/plmmsa/api/public" = "plmmsa/api/public"
+# The static web UI (HTML / CSS / JS) under src/plmmsa/api/public ships
+# automatically via the package listing above — hatch includes every file
+# in a listed package dir, not just .py. A force-include of the same dir
+# would map those files to an identical wheel path and hard-error on the
+# collision ("same path: plmmsa/api/public/app.js"), so there is none.
 
 [dependency-groups]
 dev = [
