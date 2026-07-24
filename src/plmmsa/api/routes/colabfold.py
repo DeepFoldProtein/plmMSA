@@ -221,7 +221,15 @@ def make_router(aligner_id: str) -> APIRouter:
             },
         )
 
-    @router.get("/ticket/msa/{ticket}")
+    # Status poll lives at `/ticket/{ticket}` — NOT `/ticket/msa/{ticket}`.
+    # Every ColabFold client (`run_mmseqs2`'s inner `status()`, both the
+    # `beta/colabfold.py` and current `colabfold/colabfold.py`) GETs
+    # `{host_url}/ticket/{ID}`; the `msa` segment only exists on the
+    # submit route. This must stay distinct from the POST `/ticket/msa`
+    # and POST `/ticket/pair` routes above — same prefix, different verb,
+    # so FastAPI keeps them apart and a GET for a real ticket id never
+    # collides with the literal `msa`/`pair` submit paths.
+    @router.get("/ticket/{ticket}")
     async def ticket_status(ticket: str = Path(..., min_length=1)) -> JSONResponse:
         store = await v2_mod._get_job_store()
         job = await store.get(ticket)

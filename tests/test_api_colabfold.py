@@ -93,7 +93,7 @@ def test_ticket_status_maps_running(client) -> None:
     asyncio.get_event_loop().run_until_complete(store.mark_running(job_id))
 
     with tc as c:
-        resp = c.get(f"/v2/colabfold/plmmsa/ticket/msa/{job_id}")
+        resp = c.get(f"/v2/colabfold/plmmsa/ticket/{job_id}")
     assert resp.status_code == 200
     assert resp.json() == {"id": job_id, "status": "RUNNING"}
 
@@ -113,14 +113,14 @@ def test_ticket_status_maps_succeeded_to_complete(client) -> None:
     )
 
     with tc as c:
-        resp = c.get(f"/v2/colabfold/plmmsa/ticket/msa/{job_id}")
+        resp = c.get(f"/v2/colabfold/plmmsa/ticket/{job_id}")
     assert resp.json()["status"] == "COMPLETE"
 
 
 def test_ticket_status_unknown_id_returns_unknown(client) -> None:
     tc, _ = client
     with tc as c:
-        resp = c.get("/v2/colabfold/plmmsa/ticket/msa/nope-not-a-job")
+        resp = c.get("/v2/colabfold/plmmsa/ticket/nope-not-a-job")
     assert resp.status_code == 200
     # CF's contract: unknown ids resolve to status=UNKNOWN, not 404.
     assert resp.json() == {"id": "nope-not-a-job", "status": "UNKNOWN"}
@@ -172,6 +172,31 @@ def test_result_download_missing_result_404s(client) -> None:
         resp = c.get(f"/v2/colabfold/plmmsa/result/download/{job_id}")
     assert resp.status_code == 404
     assert resp.json()["code"] == "E_JOB_NOT_FOUND"
+
+
+def test_cf_client_polls_ticket_id_not_ticket_msa_id(client) -> None:
+    """Regression: `run_mmseqs2`'s inner `status()` GETs `{host}/ticket/{ID}`
+    (both `beta/colabfold.py` and current `colabfold/colabfold.py`). The
+    status route must live at `/ticket/{ticket}`, never `/ticket/msa/{ticket}`
+    — the `msa` segment only exists on the submit route. A client polling
+    the real path previously 404'd and hung forever.
+    """
+    tc, store = client
+    body = _submit_raw(tc, "plmmsa", "MKTIIAL")
+    job_id = body["id"]
+
+    import asyncio
+
+    asyncio.get_event_loop().run_until_complete(store.mark_running(job_id))
+
+    with tc as c:
+        # The path the real CF client actually hits.
+        good = c.get(f"/v2/colabfold/plmmsa/ticket/{job_id}")
+        # The old, wrong path must no longer resolve to the status handler.
+        stale = c.get(f"/v2/colabfold/plmmsa/ticket/msa/{job_id}")
+    assert good.status_code == 200
+    assert good.json() == {"id": job_id, "status": "RUNNING"}
+    assert stale.status_code == 404
 
 
 def test_ticket_pair_returns_501(client) -> None:

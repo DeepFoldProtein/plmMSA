@@ -436,8 +436,10 @@ https://github.com/sokrypton/ColabFold/tree/main/MsaServer):
   `{"id": <ticket>, "status": "PENDING"}`.
 - `POST /v2/colabfold/<flavor>/ticket/pair` — same shape, paired
   multimer.
-- `GET /v2/colabfold/<flavor>/ticket/msa/<ticket>` — status.
-  Returns `{"id", "status"}` with
+- `GET /v2/colabfold/<flavor>/ticket/<ticket>` — status. Note the
+  path is `/ticket/<id>`, **not** `/ticket/msa/<id>` — that is the
+  path `run_mmseqs2`'s inner `status()` actually GETs (`msa` only
+  appears on the submit route). Returns `{"id", "status"}` with
   `PENDING | RUNNING | COMPLETE | ERROR | UNKNOWN`.
 - `GET /v2/colabfold/<flavor>/result/download/<ticket>` — tar
   matching CF's expectation: `uniref.a3m` (unpaired) +
@@ -464,7 +466,7 @@ https://github.com/sokrypton/ColabFold/tree/main/MsaServer):
     `SubmitRequest` with `aligner=<flavor-aligner>`, server-default
     models + score_model + filter_by_score → `JobStore.enqueue`
     → respond `{id: <job_id>, status: "PENDING"}`.
-  - `GET .../ticket/msa/<id>` → look up job → map status
+  - `GET .../ticket/<id>` → look up job → map status
     `{queued → PENDING, running → RUNNING, succeeded → COMPLETE,
     failed/cancelled → ERROR}`.
   - `GET .../result/download/<id>` → fetch `JobResult.payload`
